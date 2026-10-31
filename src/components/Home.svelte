@@ -1,5 +1,6 @@
 <script lang="ts">
   import { newId } from '../lib/ai';
+  import { copyText } from '../lib/clipboard';
   import { fetchCaptions, type HelperHealth } from '../lib/helper';
   import { deleteProject, listProjects, loadProject, saveProject, saveWords } from '../lib/storage';
   import type { LoadedProject, ProjectMeta, Settings } from '../lib/types';
@@ -18,8 +19,19 @@
   let copied = $state(false);
   let recent = $state(listProjects());
 
-  const origin = location.origin;
-  const command = `python autoclip_helper.py --allow-origin ${origin}`;
+  const ua = navigator.userAgent;
+  const isMac = /Macintosh/.test(ua);
+  // Phones cannot reach a helper on the computer: 127.0.0.1 is the phone itself.
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(ua) || (isMac && navigator.maxTouchPoints > 1);
+  const isSafari = /Safari\//.test(ua) && !/Chrome\/|Chromium\/|CriOS\/|FxiOS\/|Edg(A|iOS)?\//.test(ua);
+  const isPages = location.protocol === 'https:';
+  // Safari silently blocks https pages from calling http://127.0.0.1, with no permission prompt.
+  const safariBlocked = !isMobile && isSafari && isPages;
+  const py = isMac ? 'python3' : 'python';
+  const pip = isMac ? 'pip3' : 'pip';
+  const appUrl = location.origin + location.pathname.replace(/index\.html$/, '');
+  const command = isPages ? `${py} autoclip_helper.py --app ${appUrl}` : `${py} autoclip_helper.py`;
+  const localUrl = $derived(`${settings.helperUrl.trim().replace(/\/+$/, '')}/`);
   const rejected = $derived(health?.error === 'origin_not_allowed');
 
   async function submit(e: SubmitEvent) {
@@ -64,9 +76,13 @@
   }
 
   async function copyCommand() {
-    await navigator.clipboard.writeText(command);
-    copied = true;
-    setTimeout(() => (copied = false), 1500);
+    try {
+      await copyText(command);
+      copied = true;
+      setTimeout(() => (copied = false), 1500);
+    } catch {
+      /* the command stays visible for manual copying */
+    }
   }
 </script>
 
@@ -92,6 +108,24 @@
 
   {#if !checking && !health?.ok}
     <div class="setup">
+      {#if isMobile}
+        <div class="browser-issue">
+          <h2>Buka di komputer</h2>
+          <p>
+            Helper berjalan di komputer, dan HP/tablet tidak bisa menjangkaunya. Buka situs ini di komputer yang menjalankan
+            helper.
+          </p>
+        </div>
+      {:else if safariBlocked}
+        <div class="browser-issue">
+          <h2>Di Safari, buka lewat helper</h2>
+          <p>
+            Safari memblokir situs https ini untuk menghubungi helper (dan tidak menampilkan permintaan izin). Jalankan helper di
+            Mac ini dengan perintah di bawah, lalu buka <a href={localUrl}>{localUrl}</a>. Helper akan menyajikan web app yang
+            sama.
+          </p>
+        </div>
+      {/if}
       {#if rejected}
         <h2>Helper berjalan, tapi menolak situs ini</h2>
         <p>Matikan helper (Ctrl+C), lalu jalankan ulang dengan izin untuk alamat situs ini:</p>
@@ -102,7 +136,7 @@
           mengirim hasilnya ke halaman ini.
         </p>
         <ol>
-          <li>Install <a href="https://www.python.org/downloads/" target="_blank" rel="noreferrer">Python 3.10+</a>, lalu jalankan <code>pip install -U "yt-dlp[default,deno]"</code></li>
+          <li>Install <a href="https://www.python.org/downloads/" target="_blank" rel="noreferrer">Python 3.10+</a>, lalu jalankan <code>{pip} install -U "yt-dlp[default,deno]"</code></li>
           <li>
             Unduh <a href="./autoclip_helper.py" download>autoclip_helper.py</a> (juga ada di folder <code>helper/</code> repo ini).
           </li>
@@ -183,6 +217,19 @@
   .setup h2 {
     margin: 0 0 6px;
     font-size: 17px;
+  }
+  .browser-issue {
+    margin: -4px -6px 14px;
+    padding: 12px 14px;
+    border-radius: 8px;
+    background: rgba(248, 113, 113, 0.12);
+    border: 1px solid rgba(248, 113, 113, 0.45);
+  }
+  .browser-issue p {
+    margin: 0;
+  }
+  .browser-issue a {
+    font-weight: 700;
   }
   .setup p,
   .setup ol {

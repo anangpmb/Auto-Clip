@@ -13,7 +13,9 @@ const CHUNK_CHARS = 60_000;
 const REQUEST_TIMEOUT_MS = 180_000;
 
 export function newId(): string {
-  return crypto.randomUUID();
+  // randomUUID only exists in secure contexts; the helper serves the app over plain http.
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 export function buildSystemPrompt(s: Settings, maxClips: number): string {

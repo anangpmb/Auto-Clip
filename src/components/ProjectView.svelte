@@ -15,6 +15,7 @@
     wordIndexAt,
   } from '../lib/transcript';
   import { findClips, newId, PROVIDERS } from '../lib/ai';
+  import { copyText } from '../lib/clipboard';
   import { fetchCaptions } from '../lib/helper';
   import { saveProject, saveWords } from '../lib/storage';
 
@@ -153,7 +154,7 @@
 
   async function copy(text: string, label: string) {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyText(text);
       flash(`${label} disalin`);
     } catch {
       flash('Gagal menyalin ke clipboard');

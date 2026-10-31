@@ -6,7 +6,10 @@ uses yt-dlp to fetch a video's info and captions, and hands them to the web app
 over http://127.0.0.1. It only answers web pages you allow with --allow-origin.
 
     pip install -U "yt-dlp[default,deno]"
-    python autoclip_helper.py --allow-origin https://USERNAME.github.io
+    python autoclip_helper.py --app https://USERNAME.github.io/REPO/
+
+With --app the helper also serves the web app itself at http://127.0.0.1:8765/.
+Safari needs that: it blocks https pages (GitHub Pages) from calling http://127.0.0.1.
 """
 from __future__ import annotations
 
@@ -14,10 +17,13 @@ import argparse
 import json
 import re
 import shutil
+import ssl
 import sys
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 
 VERSION = "0.1.0"
@@ -47,6 +53,7 @@ class Config:
     allowed_origins: set[str] = set(DEV_ORIGINS)
     cookies_file: str | None = None
     cookies_from_browser: str | None = None
+    app_url: str | None = None
 
 
 CFG = Config()
@@ -285,6 +292,59 @@ def get_captions(raw_url: str, track_key: str | None) -> dict:
     }
 
 
+# ------------------------------------------------------------- web app ---
+
+APP_PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]*$")
+APP_FRESH_SECONDS = 60
+_app_cache: dict[str, tuple[float, int, str, bytes]] = {}
+
+
+def _ssl_context() -> ssl.SSLContext:
+    # python.org builds on macOS ship without root certificates; certifi comes with yt-dlp[default].
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+_SSL = _ssl_context()
+
+
+def _error_page(message: str) -> bytes:
+    return (
+        "<!doctype html><meta charset='utf-8'><title>AutoClip helper</title>"
+        "<body style='font-family:system-ui;background:#0f1115;color:#e8eaf0;padding:40px'>"
+        f"<h2>Web app tidak bisa dimuat</h2><p>{message}</p></body>"
+    ).encode("utf-8")
+
+
+def fetch_app_file(path: str) -> tuple[int, str, bytes]:
+    """Serve a web app file by fetching it from CFG.app_url (e.g. GitHub Pages)."""
+    if not APP_PATH_RE.match(path) or ".." in path:
+        return 404, "text/plain; charset=utf-8", b"Not found"
+    rel = path.lstrip("/") or "index.html"
+    hit = _app_cache.get(rel)
+    # Files under assets/ have content hashes in their names, so they never change.
+    if hit and (rel.startswith("assets/") or time.time() - hit[0] < APP_FRESH_SECONDS):
+        return hit[1:]
+    url = CFG.app_url + rel
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": f"AutoClipHelper/{VERSION}"})
+        with urllib.request.urlopen(req, timeout=15, context=_SSL) as r:
+            result = (r.status, r.headers.get("Content-Type", "application/octet-stream"), r.read())
+    except HTTPError as e:
+        return e.code, "text/plain; charset=utf-8", f"{e.code}: {url}".encode()
+    except (URLError, OSError) as e:
+        if hit:  # offline: an older copy is better than nothing
+            return hit[1:]
+        sys.stderr.write(f"[helper] gagal memuat {url}: {e}\n")
+        return 502, "text/html; charset=utf-8", _error_page(f"Gagal mengambil {url}. Cek koneksi internet dan alamat --app.")
+    _app_cache[rel] = (time.time(), *result)
+    return result
+
+
 def health() -> dict:
     return {
         "ok": True,
@@ -336,6 +396,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_app_file(self, path: str):
+        status, ctype, body = fetch_app_file(path)
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
     def reject_origin(self):
         sys.stderr.write(
             f"[helper] Ditolak: {self.origin}. Jalankan ulang dengan --allow-origin {self.origin}\n"
@@ -356,7 +425,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.host_allowed():
             return self.send_json(403, {"error": "bad_host"})
-        if urlparse(self.path).path != "/health":
+        path = urlparse(self.path).path
+        if path != "/health":
+            if CFG.app_url:
+                return self.send_app_file(path)
             return self.send_json(404, {"error": "not found"})
         if not self.origin_allowed():
             # Readable by the page so it can show the exact command to fix it.
@@ -399,6 +471,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Helper lokal untuk AutoClip Web.")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument(
+        "--app",
+        metavar="URL",
+        help="Alamat web app, mis. https://USERNAME.github.io/REPO/. Situsnya otomatis diizinkan, dan "
+        "helper ikut menyajikan web app di http://127.0.0.1:PORT/ (dibutuhkan untuk Safari).",
+    )
+    ap.add_argument(
         "--allow-origin",
         action="append",
         default=[],
@@ -418,6 +496,15 @@ def main() -> int:
         return 1
 
     CFG.allowed_origins |= {o.rstrip("/") for o in args.allow_origin}
+    # Pages served by the helper itself call it from its own origin.
+    CFG.allowed_origins |= {f"http://127.0.0.1:{args.port}", f"http://localhost:{args.port}"}
+    if args.app:
+        app = urlparse(args.app)
+        if app.scheme not in ("http", "https") or not app.netloc:
+            print(f"--app harus berupa alamat lengkap, mis. https://USERNAME.github.io/REPO/ (bukan {args.app})", file=sys.stderr)
+            return 1
+        CFG.app_url = args.app if args.app.endswith("/") else args.app + "/"
+        CFG.allowed_origins.add(f"{app.scheme}://{app.netloc}")
     CFG.cookies_file = args.cookies
     CFG.cookies_from_browser = args.cookies_from_browser
 
@@ -434,8 +521,11 @@ def main() -> int:
     print("  Situs yang diizinkan:")
     for o in sorted(CFG.allowed_origins):
         print(f"    {o}")
-    if not args.allow_origin:
-        print("  (Tambahkan --allow-origin https://USERNAME.github.io untuk versi GitHub Pages.)")
+    if CFG.app_url:
+        print(f"  Web app juga tersedia di  http://127.0.0.1:{args.port}/  (pakai alamat ini di Safari)")
+        print(f"    diambil dari {CFG.app_url}")
+    elif not args.allow_origin:
+        print("  (Tambahkan --app https://USERNAME.github.io/REPO/ untuk versi GitHub Pages.)")
     print("Tekan Ctrl+C untuk berhenti.", flush=True)
     try:
         server.serve_forever()
