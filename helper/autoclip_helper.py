@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 import urllib.request
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -353,10 +354,32 @@ def health() -> dict:
         "yt_dlp": yt_dlp.version.__version__ if yt_dlp else None,
         "ffmpeg": bool(shutil.which("ffmpeg")),
         "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
+        "app": CFG.app_url,
     }
 
 
+def running_helper(port: int) -> dict | None:
+    """Health of an AutoClip helper already listening on port, or None."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=3) as r:
+            data = json.loads(r.read())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and data.get("name") == "autoclip-helper" else None
+
+
+def open_browser(url: str):
+    print(f"Membuka {url}", flush=True)
+    webbrowser.open(url)
+
+
 # ------------------------------------------------------------------ HTTP ---
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # On Windows SO_REUSEADDR lets a second process bind the same port; we want an error instead.
+    allow_reuse_address = sys.platform != "win32"
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = f"AutoClipHelper/{VERSION}"
@@ -483,6 +506,7 @@ def main() -> int:
         metavar="URL",
         help="Alamat web app yang boleh memakai helper, mis. https://USERNAME.github.io (boleh diulang)",
     )
+    ap.add_argument("--open", action="store_true", help="Buka web app di browser setelah helper siap")
     ap.add_argument("--cookies", metavar="FILE", help="File cookies.txt (format Netscape) untuk video yang butuh login")
     ap.add_argument(
         "--cookies-from-browser",
@@ -508,12 +532,27 @@ def main() -> int:
     CFG.cookies_file = args.cookies
     CFG.cookies_from_browser = args.cookies_from_browser
 
+    local_url = f"http://127.0.0.1:{args.port}/"
+
+    def already_running(other: dict) -> int:
+        # A second click on the launcher just opens the browser again.
+        print(f"Helper sudah berjalan di {local_url}")
+        target = local_url if other.get("app") else CFG.app_url
+        if args.open and target:
+            open_browser(target)
+        return 0
+
+    other = running_helper(args.port)
+    if other:
+        return already_running(other)
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+        server = Server(("127.0.0.1", args.port), Handler)
     except OSError as e:
-        print(f"Port {args.port} sudah dipakai ({e}). Helper lain mungkin sudah berjalan.", file=sys.stderr)
+        other = running_helper(args.port)
+        if other:
+            return already_running(other)
+        print(f"Port {args.port} sudah dipakai program lain ({e}). Coba --port yang lain.", file=sys.stderr)
         return 1
-    server.daemon_threads = True
 
     h = health()
     print(f"AutoClip helper {VERSION} berjalan di http://127.0.0.1:{args.port}")
@@ -526,7 +565,12 @@ def main() -> int:
         print(f"    diambil dari {CFG.app_url}")
     elif not args.allow_origin:
         print("  (Tambahkan --app https://USERNAME.github.io/REPO/ untuk versi GitHub Pages.)")
-    print("Tekan Ctrl+C untuk berhenti.", flush=True)
+    print("Tekan Ctrl+C atau tutup jendela ini untuk berhenti.", flush=True)
+    if args.open:
+        if CFG.app_url:
+            open_browser(local_url)
+        else:
+            print("--open butuh --app, jadi browser tidak dibuka.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

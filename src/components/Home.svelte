@@ -16,7 +16,7 @@
   let url = $state('');
   let busy = $state(false);
   let error = $state('');
-  let copied = $state(false);
+  let copied = $state('');
   let recent = $state(listProjects());
 
   const ua = navigator.userAgent;
@@ -30,7 +30,8 @@
   const py = isMac ? 'python3' : 'python';
   const pip = isMac ? 'pip3' : 'pip';
   const appUrl = location.origin + location.pathname.replace(/index\.html$/, '');
-  const command = isPages ? `${py} autoclip_helper.py --app ${appUrl}` : `${py} autoclip_helper.py`;
+  const command = isPages ? `${py} autoclip_helper.py --app ${appUrl} --open` : `${py} autoclip_helper.py`;
+  const installMac = `curl -fsSL ${appUrl}install-mac.sh | bash -s ${appUrl}`;
   const localUrl = $derived(`${settings.helperUrl.trim().replace(/\/+$/, '')}/`);
   const rejected = $derived(health?.error === 'origin_not_allowed');
 
@@ -75,11 +76,11 @@
     recent = listProjects();
   }
 
-  async function copyCommand() {
+  async function copy(key: string, text: string) {
     try {
-      await copyText(command);
-      copied = true;
-      setTimeout(() => (copied = false), 1500);
+      await copyText(text);
+      copied = key;
+      setTimeout(() => (copied = ''), 1500);
     } catch {
       /* the command stays visible for manual copying */
     }
@@ -116,43 +117,71 @@
             helper.
           </p>
         </div>
-      {:else if safariBlocked}
-        <div class="browser-issue">
-          <h2>Di Safari, buka lewat helper</h2>
-          <p>
-            Safari memblokir situs https ini untuk menghubungi helper (dan tidak menampilkan permintaan izin). Jalankan helper di
-            Mac ini dengan perintah di bawah, lalu buka <a href={localUrl}>{localUrl}</a>. Helper akan menyajikan web app yang
-            sama.
-          </p>
-        </div>
-      {/if}
-      {#if rejected}
+      {:else if rejected}
         <h2>Helper berjalan, tapi menolak situs ini</h2>
-        <p>Matikan helper (Ctrl+C), lalu jalankan ulang dengan izin untuk alamat situs ini:</p>
+        <p>Matikan helper (tutup jendelanya), lalu jalankan ulang dengan izin untuk alamat situs ini:</p>
+        {@render cmd('run', command)}
       {:else}
-        <h2>Jalankan helper dulu</h2>
+        {#if safariBlocked}
+          <div class="browser-issue">
+            <h2>Di Safari, pakai alamat lokal</h2>
+            <p>
+              Safari memblokir situs https ini untuk menghubungi helper (tanpa menampilkan permintaan izin). Kalau helper sudah
+              berjalan, buka <a href={localUrl}>{localUrl}</a>. Launcher AutoClip di bawah membuka alamat itu otomatis.
+            </p>
+          </div>
+        {/if}
+        <h2>Pasang helper sekali, lalu buka dengan satu klik</h2>
         <p>
-          Browser tidak bisa mengambil data YouTube sendiri. Helper kecil di PC kamu yang melakukannya (pakai yt-dlp), lalu
+          Browser tidak bisa mengambil data YouTube sendiri. Helper kecil di komputer kamu yang melakukannya (pakai yt-dlp), lalu
           mengirim hasilnya ke halaman ini.
         </p>
-        <ol>
-          <li>Install <a href="https://www.python.org/downloads/" target="_blank" rel="noreferrer">Python 3.10+</a>, lalu jalankan <code>{pip} install -U "yt-dlp[default,deno]"</code></li>
-          <li>
-            Unduh <a href="./autoclip_helper.py" download>autoclip_helper.py</a> (juga ada di folder <code>helper/</code> repo ini).
-          </li>
-          <li>Di folder file itu, jalankan:</li>
-        </ol>
+        {#if isMac}
+          <ol>
+            <li>
+              Kalau belum ada, install <a href="https://www.python.org/downloads/macos/" target="_blank" rel="noreferrer">Python 3.10+</a>.
+            </li>
+            <li>Buka <b>Terminal</b>, lalu jalankan sekali:</li>
+          </ol>
+          {@render cmd('install', installMac)}
+          <ol start="3">
+            <li>Klik dua kali <b>AutoClip</b> di Desktop. Helper menyala dan web app langsung terbuka di browser.</li>
+          </ol>
+        {:else}
+          <ol>
+            <li>
+              Kalau belum ada, install <a href="https://www.python.org/downloads/" target="_blank" rel="noreferrer">Python 3.10+</a>
+              dan centang <i>Add python.exe to PATH</i>.
+            </li>
+            <li>
+              Unduh <a href="./AutoClip.bat" download>AutoClip.bat</a> dan
+              <a href="./autoclip_helper.py" download>autoclip_helper.py</a> ke folder yang sama.
+            </li>
+            <li>
+              Klik dua kali <b>AutoClip.bat</b>. Helper menyala dan web app langsung terbuka di browser. Pertama kali, yt-dlp dipasang
+              otomatis.
+            </li>
+          </ol>
+        {/if}
+        <details>
+          <summary>Cara manual lewat terminal</summary>
+          <p>Install yt-dlp: <code>{pip} install -U "yt-dlp[default,deno]"</code>, lalu di folder <code>autoclip_helper.py</code>:</p>
+          {@render cmd('run', command)}
+        </details>
+        <p class="muted">
+          Chrome/Edge akan meminta izin agar situs ini boleh mengakses perangkat di jaringan lokal. Pilih <b>Izinkan</b>. Halaman
+          ini mengecek helper otomatis setiap beberapa detik.
+        </p>
       {/if}
-      <div class="cmd">
-        <code>{command}</code>
-        <button class="small" onclick={copyCommand}>{copied ? 'Tersalin ✓' : 'Salin'}</button>
-      </div>
-      <p class="muted">
-        Chrome/Edge akan meminta izin agar situs ini boleh mengakses perangkat di jaringan lokal. Pilih <b>Izinkan</b>. Halaman ini
-        mengecek helper otomatis setiap beberapa detik.
-      </p>
     </div>
   {/if}
+
+  {#snippet cmd(key: string, text: string)}
+    <div class="cmd">
+      <code>{text}</code>
+      <button class="small" onclick={() => copy(key, text)}>{copied === key ? 'Tersalin ✓' : 'Salin'}</button>
+    </div>
+  {/snippet}
 
   {#if recent.length}
     <div class="recent">
@@ -255,6 +284,14 @@
   .cmd code {
     flex: 1;
     white-space: nowrap;
+  }
+  details {
+    margin: 10px 0 6px;
+    font-size: 14px;
+  }
+  summary {
+    cursor: pointer;
+    color: var(--muted);
   }
   .recent h2 {
     font-size: 16px;

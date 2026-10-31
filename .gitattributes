@@ -1,0 +1,4 @@
+# bash on macOS fails on CRLF; cmd.exe is happiest with CRLF.
+*.sh  text eol=lf
+*.py  text eol=lf
+*.bat text eol=crlf

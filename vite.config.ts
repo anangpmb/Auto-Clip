@@ -2,19 +2,26 @@ import { readFileSync } from 'node:fs';
 import { defineConfig, type Plugin } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 
-/** Ship the helper script with the site so users can download it from the page. */
-function helperDownload(): Plugin {
-  const file = 'helper/autoclip_helper.py';
+/** Ship the helper and its launchers with the site so users can download them from the page. */
+function helperDownloads(): Plugin {
+  const files: Record<string, string> = {
+    'autoclip_helper.py': 'text/x-python',
+    'install-mac.sh': 'text/x-shellscript',
+    'AutoClip.bat': 'application/x-bat',
+  };
+  const read = (name: string) => readFileSync(`helper/${name}`, 'utf8');
   return {
-    name: 'autoclip-helper-download',
+    name: 'autoclip-helper-downloads',
     generateBundle() {
-      this.emitFile({ type: 'asset', fileName: 'autoclip_helper.py', source: readFileSync(file, 'utf8') });
+      for (const name of Object.keys(files)) this.emitFile({ type: 'asset', fileName: name, source: read(name) });
     },
     configureServer(server) {
-      server.middlewares.use('/autoclip_helper.py', (_req, res) => {
-        res.setHeader('Content-Type', 'text/x-python; charset=utf-8');
-        res.end(readFileSync(file, 'utf8'));
-      });
+      for (const [name, type] of Object.entries(files)) {
+        server.middlewares.use(`/${name}`, (_req, res) => {
+          res.setHeader('Content-Type', `${type}; charset=utf-8`);
+          res.end(read(name));
+        });
+      }
     },
   };
 }
@@ -22,5 +29,5 @@ function helperDownload(): Plugin {
 // Relative base so the build works at https://<user>.github.io/<repo>/
 export default defineConfig({
   base: './',
-  plugins: [svelte(), helperDownload()],
+  plugins: [svelte(), helperDownloads()],
 });

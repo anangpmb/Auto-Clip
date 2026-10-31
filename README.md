@@ -15,26 +15,36 @@ GitHub Pages (browser)                     Helper di PC (127.0.0.1:8765)
   salin daftar / perintah yt-dlp / JSON
 ```
 
-## Menjalankan helper
+## Menjalankan helper (satu klik)
 
-1. Install [Python 3.10+](https://www.python.org/downloads/), lalu:
+Butuh [Python 3.10+](https://www.python.org/downloads/). Setelah dipasang, launcher
+menyalakan helper dan langsung membuka web app di browser. Kalau helper sudah berjalan,
+launcher cukup membuka browser lagi. Tutup jendela helper untuk mematikannya.
 
-   ```
-   pip install -U "yt-dlp[default,deno]"
-   ```
+**Mac:** jalankan sekali di Terminal:
 
-2. Jalankan helper dengan alamat situs GitHub Pages kamu:
+```
+curl -fsSL https://USERNAME.github.io/REPO/install-mac.sh | bash -s https://USERNAME.github.io/REPO/
+```
 
-   ```
-   python helper/autoclip_helper.py --app https://USERNAME.github.io/REPO/
-   ```
+Script ini membuat folder `~/AutoClip` (helper + Python sendiri berisi yt-dlp) dan ikon
+**AutoClip** di Desktop. Klik dua kali ikon itu setiap kali mau memakai AutoClip. Launcher
+juga mengambil versi helper terbaru dari situs setiap kali dibuka. Jalankan perintah di atas
+lagi kapan saja untuk memperbarui yt-dlp.
 
-   Di Windows, cukup klik dua kali `helper/jalankan-helper.bat`. Di Mac, pakai `pip3` dan
-   `python3` di Terminal.
+**Windows:** klik dua kali `helper/AutoClip.bat`. Saat pertama kali, yt-dlp dipasang
+otomatis. Ganti `APP_URL` di dalamnya kalau alamat situs kamu berbeda.
 
-   `--app` mengizinkan situs itu memakai helper, dan sekaligus membuat helper menyajikan web
-   app yang sama di `http://127.0.0.1:8765/`. Alamat `localhost:5173` (mode pengembangan)
-   selalu diizinkan.
+**Manual:**
+
+```
+pip install -U "yt-dlp[default,deno]"
+python helper/autoclip_helper.py --app https://USERNAME.github.io/REPO/ --open
+```
+
+`--app` mengizinkan situs itu memakai helper, dan sekaligus membuat helper menyajikan web
+app yang sama di `http://127.0.0.1:8765/`. `--open` membuka alamat itu di browser. Alamat
+`localhost:5173` (mode pengembangan) selalu diizinkan.
 
 ### Browser mana yang dipakai
 
@@ -58,6 +68,7 @@ Opsi lain:
 | `--cookies-from-browser firefox` | Untuk video yang butuh login (dibatasi usia, khusus member) atau saat YouTube minta verifikasi bot |
 | `--cookies cookies.txt` | Sama, pakai file cookies format Netscape |
 | `--port 8765` | Ganti port (sesuaikan juga di Pengaturan web app) |
+| `--open` | Buka web app di browser setelah helper siap |
 
 ## Memakai web app
 
