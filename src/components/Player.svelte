@@ -5,8 +5,9 @@
   interface Props {
     videoId: string;
     ontime?: (t: number, playing: boolean) => void;
+    children?: import('svelte').Snippet;
   }
-  let { videoId, ontime }: Props = $props();
+  let { videoId, ontime, children }: Props = $props();
 
   let wrap: HTMLDivElement;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -74,6 +75,7 @@
 
 <div class="player">
   <div class="frame" bind:this={wrap}></div>
+  {@render children?.()}
   {#if error}
     <div class="error">
       <p>{error}</p>

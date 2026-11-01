@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import ClipEditor from './ClipEditor.svelte';
+  import ExportModal from './ExportModal.svelte';
   import type { Clip, LoadedProject, Settings } from '../lib/types';
   import {
     buildUnits,
@@ -16,23 +17,26 @@
   } from '../lib/transcript';
   import { findClips, newId, PROVIDERS } from '../lib/ai';
   import { copyText } from '../lib/clipboard';
-  import { fetchCaptions } from '../lib/helper';
+  import { fetchCaptions, type HelperHealth } from '../lib/helper';
   import { saveProject, saveWords } from '../lib/storage';
+  import { downloadFile, generateSrt } from '../lib/captions';
 
   interface Props {
     initial: LoadedProject;
     settings: Settings;
     helperOk: boolean;
+    helperHealth?: HelperHealth | null;
     onclose: () => void;
     onsettings: () => void;
   }
-  let { initial, settings, helperOk, onclose, onsettings }: Props = $props();
+  let { initial, settings, helperOk, helperHealth = null, onclose, onsettings }: Props = $props();
 
   // The parent remounts this view per project, so the initial value is all we need.
   let meta = $state(untrack(() => initial.meta));
   let words = $state.raw(untrack(() => initial.words));
   let clips = $state(untrack(() => initial.clips));
   let selectedId = $state<string | null>(untrack(() => initial.clips[0]?.id ?? null));
+  let showExportModal = $state(false);
 
   const units = $derived(buildUnits(words));
   const selected = $derived(clips.find((c) => c.id === selectedId) ?? null);
@@ -206,6 +210,15 @@
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
+
+  function downloadSelectedSrt() {
+    if (!selected) return;
+    const b = boundsOf(selected);
+    const clipWords = words.slice(selected.w0, selected.w1 + 1);
+    const srt = generateSrt(clipWords, b.start, b.end, { uppercase: settings.captionUppercase });
+    downloadFile(`${safeName(selected.title)}.srt`, srt, 'text/plain;charset=utf-8');
+    flash('File .srt berhasil diunduh');
+  }
 </script>
 
 <section class="project">
@@ -244,6 +257,8 @@
     {/if}
     <span class="spacer"></span>
     {#if clips.length}
+      <button class="primary" onclick={() => (showExportModal = true)} title="Ekspor video dengan auto caption">🎬 Ekspor Video</button>
+      <button onclick={downloadSelectedSrt} title="Unduh subtitle .srt untuk klip yang dipilih">Unduh Caption (.srt)</button>
       <button onclick={copyList}>Salin daftar</button>
       <button onclick={copyYtDlp} title="Perintah untuk mengunduh potongan mentah dengan yt-dlp">Salin perintah yt-dlp</button>
       <button onclick={downloadJson}>Unduh JSON</button>
@@ -280,7 +295,19 @@
 
       <div class="panel">
         {#if selected}
-          <ClipEditor {words} {units} clip={selected} videoId={meta.video.id} {settings} onchange={updateClip} ontime={(t) => (playerTime = t)} />
+          <ClipEditor
+            {words}
+            {units}
+            clip={selected}
+            videoId={meta.video.id}
+            videoUrl={meta.video.url}
+            videoTitle={meta.video.title}
+            {settings}
+            {helperOk}
+            {helperHealth}
+            onchange={updateClip}
+            ontime={(t) => (playerTime = t)}
+          />
         {:else}
           <p class="muted">Pilih klip di sebelah kiri.</p>
         {/if}
@@ -295,6 +322,20 @@
       </p>
       <button onclick={addManualClip}>+ Tambah klip manual</button>
     </div>
+  {/if}
+
+  {#if showExportModal && selected}
+    <ExportModal
+      clip={selected}
+      {words}
+      videoUrl={meta.video.url}
+      videoId={meta.video.id}
+      videoTitle={meta.video.title}
+      {settings}
+      {helperOk}
+      {helperHealth}
+      onclose={() => (showExportModal = false)}
+    />
   {/if}
 
   {#if toast}<div class="toast" role="status">{toast}</div>{/if}

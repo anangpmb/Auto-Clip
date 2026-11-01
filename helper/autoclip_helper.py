@@ -15,19 +15,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import ssl
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
+import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 DEFAULT_PORT = 8765
 DEV_ORIGINS = {
     "http://localhost:5173",
@@ -36,7 +40,7 @@ DEV_ORIGINS = {
     "http://127.0.0.1:4173",
 }
 CACHE_TTL = 20 * 60  # caption URLs from YouTube expire after a few hours
-MAX_BODY = 64 * 1024
+MAX_BODY = 512 * 1024
 
 try:
     import yt_dlp
@@ -346,13 +350,202 @@ def fetch_app_file(path: str) -> tuple[int, str, bytes]:
     return result
 
 
+# ------------------------------------------------------------- export ---
+
+def get_ffmpeg_path() -> str | None:
+    for candidate in (
+        shutil.which("ffmpeg"),
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/usr/bin/ffmpeg",
+    ):
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def ffmpeg_has_subtitles() -> bool:
+    bin_path = get_ffmpeg_path()
+    if not bin_path:
+        return False
+    try:
+        res = subprocess.run([bin_path, "-filters"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+        out = (res.stdout or "") + (res.stderr or "")
+        return "subtitles" in out or "ass" in out
+    except Exception:
+        return False
+
+
+def safe_filename(name: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|]+', '', name).strip()
+    return cleaned[:80] or "klip"
+
+
+_export_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def _run_export_job(job_id: str, params: dict):
+    with _jobs_lock:
+        job = _export_jobs.get(job_id)
+    if not job:
+        return
+
+    url = clean_url(params.get("url", ""))
+    start = max(0.0, float(params.get("start", 0)))
+    end = max(start + 0.1, float(params.get("end", 0)))
+    title = params.get("title") or "klip"
+    aspect_ratio = params.get("aspectRatio") or "16:9"
+    caption_style = params.get("captionStyle") or "viral"
+    ass_content = params.get("assContent") or ""
+    srt_content = params.get("srtContent") or ""
+
+    tmpdir = tempfile.mkdtemp(prefix="autoclip_")
+    job["tmpdir"] = tmpdir
+    base_name = safe_filename(title)
+    job["filename"] = f"{base_name}.mp4"
+
+    try:
+        # Step 1: Download video section
+        with _jobs_lock:
+            job["status"] = "downloading"
+            job["progress"] = 20
+            job["message"] = "Mengunduh segmen video..."
+
+        ytdlp_cmd = [sys.executable, "-m", "yt_dlp"]
+        if shutil.which("yt-dlp"):
+            ytdlp_cmd = [shutil.which("yt-dlp")]
+
+        raw_template = os.path.join(tmpdir, "raw.%(ext)s")
+        cmd = ytdlp_cmd + [
+            "--download-sections", f"*{start:.2f}-{end:.2f}",
+            "--force-keyframes-at-cuts",
+            "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+            "--no-playlist",
+            "-o", raw_template,
+            url,
+        ]
+        if CFG.cookies_file:
+            cmd.extend(["--cookies", CFG.cookies_file])
+        if CFG.cookies_from_browser:
+            cmd.extend(["--cookies-from-browser", CFG.cookies_from_browser])
+
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=240)
+        if res.returncode != 0:
+            err_msg = friendly_error(Exception(res.stderr or res.stdout or "Gagal mengunduh dengan yt-dlp."))
+            raise UserError(err_msg)
+
+        raw_files = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.startswith("raw.")]
+        if not raw_files:
+            raise UserError("Video mentah tidak berhasil diunduh.")
+        raw_input = raw_files[0]
+
+        ffmpeg_bin = get_ffmpeg_path()
+        if not ffmpeg_bin:
+            with _jobs_lock:
+                job["status"] = "done"
+                job["progress"] = 100
+                job["message"] = "Selesai (tanpa FFmpeg)"
+                job["output_file"] = raw_input
+            return
+
+        with _jobs_lock:
+            job["status"] = "rendering"
+            job["progress"] = 55
+            job["message"] = "Merender video & caption..."
+
+        sub_file = None
+        has_sub_filter = ffmpeg_has_subtitles()
+        if caption_style != "none":
+            if ass_content:
+                sub_file = os.path.join(tmpdir, "sub.ass")
+                with open(sub_file, "w", encoding="utf-8") as f:
+                    f.write(ass_content)
+            elif srt_content:
+                sub_file = os.path.join(tmpdir, "sub.srt")
+                with open(sub_file, "w", encoding="utf-8") as f:
+                    f.write(srt_content)
+
+        final_output = os.path.join(tmpdir, "final.mp4")
+
+        vf_filter = ""
+        filter_complex = ""
+        is_complex = False
+
+        if aspect_ratio == "9:16_blur":
+            is_complex = True
+            filter_complex = (
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];"
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease[fg];"
+                "[bg][fg]overlay=(W-w)/2:(H-h)/2"
+            )
+            if sub_file and has_sub_filter:
+                escaped_sub = sub_file.replace("\\", "/").replace(":", "\\:")
+                filter_complex += f"[vmid];[vmid]subtitles='{escaped_sub}'[vout]"
+            else:
+                filter_complex += "[vout]"
+        elif aspect_ratio == "9:16_crop":
+            vf_filter = "crop=ih*9/16:ih,scale=1080:1920"
+            if sub_file and has_sub_filter:
+                escaped_sub = sub_file.replace("\\", "/").replace(":", "\\:")
+                vf_filter += f",subtitles='{escaped_sub}'"
+        else:  # 16:9
+            if sub_file and has_sub_filter:
+                escaped_sub = sub_file.replace("\\", "/").replace(":", "\\:")
+                vf_filter = f"subtitles='{escaped_sub}'"
+
+        ff_cmd = [ffmpeg_bin, "-y", "-i", raw_input]
+        soft_sub = bool(sub_file and not has_sub_filter)
+        if soft_sub and sub_file:
+            ff_cmd.extend(["-i", sub_file])
+
+        if is_complex:
+            ff_cmd.extend(["-filter_complex", filter_complex, "-map", "[vout]", "-map", "0:a?"])
+        elif vf_filter:
+            ff_cmd.extend(["-vf", vf_filter])
+
+        ff_cmd.extend([
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "22",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-pix_fmt", "yuv420p",
+        ])
+
+        if soft_sub:
+            ff_cmd.extend(["-c:s", "mov_text", "-metadata:s:s:0", "language=ind"])
+
+        ff_cmd.append(final_output)
+
+        ff_res = subprocess.run(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=240)
+        if ff_res.returncode != 0:
+            err_log = (ff_res.stderr or ff_res.stdout or "")[-400:]
+            raise UserError(f"Gagal merender dengan FFmpeg: {err_log}")
+
+        with _jobs_lock:
+            job["status"] = "done"
+            job["progress"] = 100
+            job["message"] = "Selesai!"
+            job["output_file"] = final_output
+
+    except Exception as e:
+        sys.stderr.write(f"[helper export error] {e!r}\n")
+        with _jobs_lock:
+            job["status"] = "error"
+            job["error"] = friendly_error(e)
+            job["message"] = f"Gagal: {job['error']}"
+
+
 def health() -> dict:
+    ff_path = get_ffmpeg_path()
     return {
         "ok": True,
         "name": "autoclip-helper",
         "version": VERSION,
         "yt_dlp": yt_dlp.version.__version__ if yt_dlp else None,
-        "ffmpeg": bool(shutil.which("ffmpeg")),
+        "ffmpeg": bool(ff_path),
+        "ffmpeg_subtitles": ffmpeg_has_subtitles(),
         "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
         "app": CFG.app_url,
     }
@@ -428,6 +621,23 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_file_download(self, filepath: str, filename: str):
+        if not os.path.isfile(filepath):
+            return self.send_json(404, {"error": "file not found"})
+        size = os.path.getsize(filepath)
+        self.send_response(200)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Content-Length", str(size))
+        clean_name = safe_filename(filename)
+        if not clean_name.lower().endswith(".mp4"):
+            clean_name += ".mp4"
+        self.send_header("Content-Disposition", f'attachment; filename="{clean_name}"')
+        self.send_header("Cache-Control", "no-cache")
+        self.cors()
+        self.end_headers()
+        with open(filepath, "rb") as f:
+            shutil.copyfileobj(f, self.wfile)
+
     def reject_origin(self):
         sys.stderr.write(
             f"[helper] Ditolak: {self.origin}. Jalankan ulang dengan --allow-origin {self.origin}\n"
@@ -448,17 +658,50 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.host_allowed():
             return self.send_json(403, {"error": "bad_host"})
-        path = urlparse(self.path).path
-        if path != "/health":
-            if CFG.app_url:
-                return self.send_app_file(path)
-            return self.send_json(404, {"error": "not found"})
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == "/health":
+            if not self.origin_allowed():
+                return self.send_json(
+                    200, {"ok": False, "error": "origin_not_allowed", "origin": self.origin}, allow_any_origin=True
+                )
+            return self.send_json(200, health())
+
         if not self.origin_allowed():
-            # Readable by the page so it can show the exact command to fix it.
-            return self.send_json(
-                200, {"ok": False, "error": "origin_not_allowed", "origin": self.origin}, allow_any_origin=True
-            )
-        self.send_json(200, health())
+            return self.reject_origin()
+
+        if path == "/export/status":
+            qs = parse_qs(parsed.query)
+            job_id = (qs.get("jobId") or [""])[0]
+            with _jobs_lock:
+                job = _export_jobs.get(job_id)
+            if not job:
+                return self.send_json(404, {"error": "Pekerjaan ekspor tidak ditemukan."})
+            return self.send_json(200, {
+                "ok": True,
+                "jobId": job_id,
+                "status": job.get("status", "pending"),
+                "progress": job.get("progress", 0),
+                "message": job.get("message", ""),
+                "filename": job.get("filename", "clip.mp4"),
+                "error": job.get("error"),
+            })
+
+        if path == "/export/download":
+            qs = parse_qs(parsed.query)
+            job_id = (qs.get("jobId") or [""])[0]
+            with _jobs_lock:
+                job = _export_jobs.get(job_id)
+            if not job:
+                return self.send_json(404, {"error": "Pekerjaan ekspor tidak ditemukan."})
+            if job.get("status") != "done" or not job.get("output_file"):
+                return self.send_json(400, {"error": "Video belum selesai diproses."})
+            return self.send_file_download(job["output_file"], job.get("filename", "clip.mp4"))
+
+        if CFG.app_url:
+            return self.send_app_file(path)
+        return self.send_json(404, {"error": "not found"})
 
     def do_POST(self):
         if not self.host_allowed():
@@ -473,15 +716,34 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self.send_json(400, {"error": "JSON tidak valid."})
 
-        if urlparse(self.path).path != "/captions":
-            return self.send_json(404, {"error": "not found"})
-        try:
-            self.send_json(200, get_captions(str(body.get("url", "")), body.get("track")))
-        except UserError as e:
-            self.send_json(400, {"error": str(e)})
-        except Exception as e:  # keep the server alive and tell the user something useful
-            sys.stderr.write(f"[helper] error: {e!r}\n")
-            self.send_json(500, {"error": friendly_error(e)})
+        path = urlparse(self.path).path
+        if path == "/captions":
+            try:
+                self.send_json(200, get_captions(str(body.get("url", "")), body.get("track")))
+            except UserError as e:
+                self.send_json(400, {"error": str(e)})
+            except Exception as e:
+                sys.stderr.write(f"[helper] error: {e!r}\n")
+                self.send_json(500, {"error": friendly_error(e)})
+            return
+
+        if path == "/export":
+            url = clean_url(body.get("url", ""))
+            if not url or not is_youtube(url):
+                return self.send_json(400, {"error": "Link YouTube tidak valid."})
+            job_id = str(uuid.uuid4())
+            with _jobs_lock:
+                _export_jobs[job_id] = {
+                    "id": job_id,
+                    "status": "pending",
+                    "progress": 5,
+                    "message": "Menyiapkan pekerjaan ekspor...",
+                    "created_at": time.time(),
+                }
+            threading.Thread(target=_run_export_job, args=(job_id, body), daemon=True).start()
+            return self.send_json(200, {"ok": True, "jobId": job_id})
+
+        return self.send_json(404, {"error": "not found"})
 
 
 def main() -> int:

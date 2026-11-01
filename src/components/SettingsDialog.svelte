@@ -88,6 +88,43 @@
     </fieldset>
 
     <fieldset>
+      <legend>Ekspor Video & Auto Caption</legend>
+      <div class="grid2">
+        <label>
+          Rasio aspek default
+          <select bind:value={settings.aspectRatio}>
+            <option value="9:16_blur">9:16 Vertikal (Blur Background - Shorts/Reels/TikTok)</option>
+            <option value="9:16_crop">9:16 Vertikal (Center Crop)</option>
+            <option value="16:9">16:9 Horizontal (Asli)</option>
+          </select>
+        </label>
+        <label>
+          Gaya caption default
+          <select bind:value={settings.captionStyle}>
+            <option value="viral">🔥 Viral Highlight (Karaoke)</option>
+            <option value="box">⬛ Modern Box</option>
+            <option value="neon">✨ Neon Pop</option>
+            <option value="classic">📄 Klasik Subtitle</option>
+          </select>
+        </label>
+      </div>
+      <div class="grid2">
+        <label>
+          Posisi caption
+          <select bind:value={settings.captionPosition}>
+            <option value="bottom">Bawah (Standar)</option>
+            <option value="center">Tengah (Podcast)</option>
+            <option value="top">Atas</option>
+          </select>
+        </label>
+        <label class="check-label">
+          <input type="checkbox" bind:checked={settings.captionUppercase} />
+          <span>Format HURUF BESAR (ALL CAPS)</span>
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset>
       <legend>Helper</legend>
       <label>
         Alamat helper
@@ -161,6 +198,20 @@
   }
   .row input {
     flex: 1;
+  }
+  .grid2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+    align-items: end;
+  }
+  .check-label {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    margin-bottom: 6px;
   }
   .grid3 {
     display: grid;

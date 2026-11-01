@@ -3,7 +3,10 @@
   import Player from './Player.svelte';
   import Timeline from './Timeline.svelte';
   import TranscriptPane from './TranscriptPane.svelte';
+  import CaptionOverlay from './CaptionOverlay.svelte';
+  import ExportModal from './ExportModal.svelte';
   import type { Clip, Settings, Unit, Word } from '../lib/types';
+  import type { HelperHealth } from '../lib/helper';
   import {
     clipBounds,
     durationStatus,
@@ -20,11 +23,27 @@
     units: Unit[];
     clip: Clip;
     videoId: string;
+    videoUrl?: string;
+    videoTitle?: string;
     settings: Settings;
+    helperOk?: boolean;
+    helperHealth?: HelperHealth | null;
     onchange: (clip: Clip) => void;
     ontime?: (t: number) => void;
   }
-  let { words, units, clip, videoId, settings, onchange, ontime }: Props = $props();
+  let {
+    words,
+    units,
+    clip,
+    videoId,
+    videoUrl = '',
+    videoTitle = '',
+    settings,
+    helperOk = false,
+    helperHealth = null,
+    onchange,
+    ontime,
+  }: Props = $props();
 
   let player = $state<ReturnType<typeof Player>>();
   let snap = $state(true);
@@ -33,6 +52,7 @@
   let currentTime = $state(0);
   let playing = $state(false);
   let viewFor = '';
+  let showExportModal = $state(false);
 
   const bounds = $derived(clipBounds(words, clip.w0, clip.w1, settings.padStart, settings.padEnd));
   const duration = $derived(bounds.end - bounds.start);
@@ -119,7 +139,20 @@
 
   <div class="top">
     {#key videoId}
-      <Player bind:this={player} {videoId} ontime={handleTime} />
+      <Player bind:this={player} {videoId} ontime={handleTime}>
+        <CaptionOverlay
+          {words}
+          w0={clip.w0}
+          w1={clip.w1}
+          clipStart={bounds.start}
+          clipEnd={bounds.end}
+          {currentTime}
+          enabled={settings.captionEnabled}
+          style={settings.captionStyle}
+          position={settings.captionPosition}
+          uppercase={settings.captionUppercase}
+        />
+      </Player>
     {/key}
 
     <div class="side">
@@ -136,6 +169,34 @@
         <button onclick={checkStart} title="Putar 4 detik pertama">Cek awal</button>
         <button onclick={checkEnd} title="Putar 4 detik terakhir">Cek akhir</button>
         <button onclick={() => player?.pause()} aria-label="Jeda">⏸</button>
+      </div>
+
+      <div class="export-action">
+        <button class="export-btn" onclick={() => (showExportModal = true)}>
+          🎬 Ekspor Video & Subtitle
+        </button>
+      </div>
+
+      <div class="caption-bar">
+        <label class="cap-toggle">
+          <input type="checkbox" bind:checked={settings.captionEnabled} />
+          <span class="cap-title">Auto Caption</span>
+        </label>
+        {#if settings.captionEnabled}
+          <div class="cap-options">
+            <select bind:value={settings.captionStyle} aria-label="Gaya Caption">
+              <option value="viral">🔥 Viral Highlight</option>
+              <option value="box">⬛ Modern Box</option>
+              <option value="neon">✨ Neon Pop</option>
+              <option value="classic">📄 Klasik</option>
+            </select>
+            <select bind:value={settings.captionPosition} aria-label="Posisi Caption">
+              <option value="bottom">Bawah</option>
+              <option value="center">Tengah</option>
+              <option value="top">Atas</option>
+            </select>
+          </div>
+        {/if}
       </div>
 
       <div class="nudge">
@@ -199,6 +260,20 @@
     onseek={seek}
     onexpand={expand}
   />
+
+  {#if showExportModal}
+    <ExportModal
+      {clip}
+      {words}
+      videoUrl={videoUrl || `https://www.youtube.com/watch?v=${videoId}`}
+      {videoId}
+      videoTitle={videoTitle || clip.title}
+      {settings}
+      helperOk={helperOk ?? false}
+      helperHealth={helperHealth ?? null}
+      onclose={() => (showExportModal = false)}
+    />
+  {/if}
 </div>
 
 <style>
@@ -304,8 +379,56 @@
   }
   .opts label {
     display: flex;
-    gap: 6px;
     align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+  .export-action {
+    display: flex;
+  }
+  .export-btn {
+    width: 100%;
+    padding: 8px 12px;
+    font-weight: 700;
+    font-size: 13px;
+    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+    border: none;
+    color: #fff;
+    border-radius: var(--radius);
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+    transition: filter 0.15s ease;
+  }
+  .export-btn:hover {
+    filter: brightness(1.1);
+  }
+  .caption-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    background: var(--panel-2);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+  }
+  .cap-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .cap-options {
+    display: flex;
+    gap: 6px;
+  }
+  .cap-options select {
+    flex: 1;
+    padding: 3px 6px;
+    font-size: 11px;
+    border-radius: 4px;
+    background: var(--panel);
   }
   @media (max-width: 900px) {
     .top {

@@ -84,4 +84,9 @@ export interface Settings {
   instructions: string;
   padStart: number;
   padEnd: number;
+  captionEnabled: boolean;
+  captionStyle: 'viral' | 'box' | 'classic' | 'neon';
+  captionPosition: 'bottom' | 'center' | 'top';
+  captionUppercase: boolean;
+  aspectRatio: '16:9' | '9:16_blur' | '9:16_crop';
 }

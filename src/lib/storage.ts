@@ -16,6 +16,11 @@ export const DEFAULT_SETTINGS: Settings = {
   instructions: '',
   padStart: 0.15,
   padEnd: 0.35,
+  captionEnabled: true,
+  captionStyle: 'viral',
+  captionPosition: 'bottom',
+  captionUppercase: true,
+  aspectRatio: '9:16_blur',
 };
 
 function read<T>(key: string): T | null {

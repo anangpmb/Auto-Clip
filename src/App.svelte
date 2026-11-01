@@ -62,6 +62,7 @@
         initial={project}
         {settings}
         helperOk={!!health?.ok}
+        helperHealth={health}
         onclose={() => (project = null)}
         onsettings={() => (settingsOpen = true)}
       />
