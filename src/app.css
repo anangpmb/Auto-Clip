@@ -23,6 +23,11 @@
   box-sizing: border-box;
 }
 
+html {
+  /* In-page scrolls stop below the sticky header instead of hiding behind it. */
+  scroll-padding-top: 72px;
+}
+
 body {
   margin: 0;
   min-height: 100vh;

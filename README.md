@@ -94,6 +94,25 @@ Proyek tersimpan otomatis di browser (localStorage).
 Transkrip "otomatis" dari YouTube punya waktu per kata yang asli, jadi potongannya paling
 presisi. Subtitle "manual" teksnya lebih rapi tapi waktu per katanya diperkirakan.
 
+## Ekspor video MP4
+
+Tombol **Ekspor Video & Subtitle** membuat helper:
+
+1. Mengunduh hanya potongan klip itu, maksimal 1080p.
+2. Untuk **9:16 Vertikal (Ikuti Wajah)**: mendeteksi wajah (OpenCV + model YuNet) dan
+   pergantian shot, lalu menggerakkan "kamera" virtual. Kamera diam kalau wajah hanya
+   bergeser sedikit, ikut bergeser halus kalau subjek berjalan, dan langsung pindah saat
+   ganti shot. Seluruh kotak wajah selalu dijaga di dalam frame. Beberapa orang yang
+   berdekatan dibingkai bersama; kalau terlalu jauh, kamera mengikuti satu orang dan tidak
+   berpindah karena perubahan sesaat. Tanpa wajah, dipakai potongan tengah.
+3. Menggambar caption sendiri (Pillow) dengan gaya yang sama dengan pratinjau di editor,
+   jadi tidak butuh FFmpeg dengan libass.
+4. Merender MP4 (H.264 + AAC) dan browser langsung mengunduhnya.
+
+Kebutuhan: FFmpeg (`brew install ffmpeg` / `winget install ffmpeg`), plus paket Python
+`opencv-python-headless` dan `pillow`. Launcher Mac/Windows memasangnya otomatis. Model
+wajah (~230 KB) diunduh sekali ke `~/.autoclip/models` dan dicek hash-nya.
+
 ## Pengembangan
 
 ```
@@ -114,5 +133,5 @@ npm run build    # hasil di dist/
 
 ## Rencana berikutnya
 
-- Tahap 2: render klip vertikal 9:16 (reframe wajah, caption karaoke) langsung dari editor.
+- Pratinjau area crop "Ikuti Wajah" langsung di editor, dan layout split untuk dua pembicara.
 - Tahap 3: input file video lokal dengan transkripsi Whisper di browser, suara hook, efek, musik.

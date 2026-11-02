@@ -1,3 +1,4 @@
+import type { CaptionCue } from './captions';
 import type { Track, VideoInfo, Word, WordTiming } from './types';
 
 export interface HelperHealth {
@@ -7,8 +8,25 @@ export interface HelperHealth {
   version?: string;
   yt_dlp?: string | null;
   ffmpeg?: boolean;
-  ffmpeg_subtitles?: boolean;
+  /** OpenCV is installed, so 9:16 crops follow faces. */
+  face_detect?: boolean;
+  /** Pillow is installed, so captions can be burned in. */
+  captions?: boolean;
   js_runtime?: string | null;
+}
+
+/** Oldest helper whose /export understands `cues` and face tracking. */
+export const EXPORT_HELPER_VERSION = '0.3.0';
+
+/** True when version a is older than b (dotted numbers). */
+export function versionBefore(a: string | undefined, b: string): boolean {
+  const pa = (a ?? '0').split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d < 0;
+  }
+  return false;
 }
 
 export interface CaptionsResult {
@@ -28,18 +46,20 @@ export interface ExportParams {
   aspectRatio: '16:9' | '9:16_blur' | '9:16_crop';
   captionStyle: 'viral' | 'box' | 'classic' | 'neon' | 'none';
   captionPosition?: 'bottom' | 'center' | 'top';
-  assContent?: string;
-  srtContent?: string;
+  /** Caption cues with word timings relative to the clip start; the helper draws them. */
+  cues?: CaptionCue[];
 }
 
 export interface ExportStatus {
   ok: boolean;
   jobId: string;
-  status: 'pending' | 'downloading' | 'rendering' | 'done' | 'error';
+  status: 'pending' | 'downloading' | 'analyzing' | 'rendering' | 'done' | 'error';
   progress: number;
   message: string;
   filename?: string;
   error?: string;
+  /** Things the helper did differently, e.g. a centre crop because no face was found. */
+  notes?: string[];
 }
 
 const base = (url: string) => url.trim().replace(/\/+$/, '');

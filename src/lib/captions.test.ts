@@ -98,14 +98,28 @@ describe('generateAss', () => {
     expect(ass).toContain('PlayResX: 1080');
     expect(ass).toContain('PlayResY: 1920');
     expect(ass).toContain('Dialogue:');
-    expect(ass).toContain('\\k'); // karaoke tag in viral style
   });
 
-  it('generates classic style without karaoke tags', () => {
+  it('highlights the word being spoken, like the preview', () => {
+    const ass = generateAss(sampleWords, 0.0, 2.0, { style: 'viral', aspectRatio: '9:16_blur', uppercase: true });
+    const lines = ass.split('\n').filter((l) => l.startsWith('Dialogue:'));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('0:00:00.00,0:00:00.60');
+    expect(lines[0]).toContain('{\\c&H15CCFA&}AUTOCLIP{\\r} VIRAL');
+    expect(lines[1]).toContain('AUTOCLIP {\\c&H15CCFA&}VIRAL{\\r}');
+  });
+
+  it('generates classic style as one plain line per cue', () => {
     const ass = generateAss(sampleWords, 0.0, 2.0, { style: 'classic', aspectRatio: '16:9' });
     expect(ass).toContain('PlayResX: 1920');
     expect(ass).toContain('PlayResY: 1080');
-    expect(ass).not.toContain('\\k');
+    expect(ass).not.toContain('\\c&H');
+    expect(ass.split('\n').filter((l) => l.startsWith('Dialogue:'))).toHaveLength(1);
+  });
+
+  it('keeps braces and backslashes out of caption text', () => {
+    const ass = generateAss([{ s: 0, e: 0.5, t: '{\\b1}hai' }], 0, 1, { style: 'classic', uppercase: false });
+    expect(ass).toContain(',,/b1hai');
   });
 });
 

@@ -94,7 +94,7 @@
           Rasio aspek default
           <select bind:value={settings.aspectRatio}>
             <option value="9:16_blur">9:16 Vertikal (Blur Background - Shorts/Reels/TikTok)</option>
-            <option value="9:16_crop">9:16 Vertikal (Center Crop)</option>
+            <option value="9:16_crop">9:16 Vertikal (Ikuti Wajah)</option>
             <option value="16:9">16:9 Horizontal (Asli)</option>
           </select>
         </label>

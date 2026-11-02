@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import Player from './Player.svelte';
   import Timeline from './Timeline.svelte';
   import TranscriptPane from './TranscriptPane.svelte';
@@ -53,6 +53,29 @@
   let playing = $state(false);
   let viewFor = '';
   let showExportModal = $state(false);
+
+  // Mini player: when the preview has been used and the user scrolls it out of view
+  // (e.g. to edit the transcript), it floats in the corner instead of disappearing.
+  let playerSlot: HTMLDivElement;
+  let slotHidden = $state(false);
+  let engaged = $state(false);
+  let miniDismissed = $state(false);
+  const floating = $derived(slotHidden && engaged && !miniDismissed);
+
+  onMount(() => {
+    const header = (document.querySelector('header.top') as HTMLElement | null)?.offsetHeight ?? 0;
+    const io = new IntersectionObserver(([entry]) => (slotHidden = entry.intersectionRatio < 0.35), {
+      rootMargin: `-${header}px 0px 0px 0px`,
+      threshold: [0, 0.35, 1],
+    });
+    io.observe(playerSlot);
+    return () => io.disconnect();
+  });
+
+  function showDockedPlayer() {
+    const smooth = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    playerSlot.scrollIntoView({ block: 'start', behavior: smooth ? 'smooth' : 'auto' });
+  }
 
   const bounds = $derived(clipBounds(words, clip.w0, clip.w1, settings.padStart, settings.padEnd));
   const duration = $derived(bounds.end - bounds.start);
@@ -120,6 +143,10 @@
   const seek = (t: number) => player?.playRange(t, t + 8);
 
   function handleTime(t: number, isPlaying: boolean) {
+    if (isPlaying && !playing) {
+      engaged = true;
+      miniDismissed = false; // a new play brings the mini player back
+    }
     currentTime = t;
     playing = isPlaying;
     ontime?.(t);
@@ -138,22 +165,42 @@
   </div>
 
   <div class="top">
-    {#key videoId}
-      <Player bind:this={player} {videoId} ontime={handleTime}>
-        <CaptionOverlay
-          {words}
-          w0={clip.w0}
-          w1={clip.w1}
-          clipStart={bounds.start}
-          clipEnd={bounds.end}
-          {currentTime}
-          enabled={settings.captionEnabled}
-          style={settings.captionStyle}
-          position={settings.captionPosition}
-          uppercase={settings.captionUppercase}
-        />
-      </Player>
-    {/key}
+    <!-- The slot keeps the player's space; only the shell moves, so the iframe never reloads. -->
+    <div class="player-slot" bind:this={playerSlot}>
+      <div class="player-shell" class:floating role={floating ? 'region' : undefined} aria-label={floating ? 'Pratinjau klip' : undefined}>
+        {#if floating}
+          <div class="mini-bar">
+            <span class="mini-title">{playing ? 'Memutar' : 'Dijeda'} · {fmtTime(currentTime)}</span>
+            <button class="mini-btn" onclick={showDockedPlayer} aria-label="Kembali ke pemutar" title="Kembali ke pemutar">
+              <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"
+                ><path d="M10 16V4m0 0-5 5m5-5 5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg
+              >
+            </button>
+            <button class="mini-btn" onclick={() => (miniDismissed = true)} aria-label="Tutup pemutar mini" title="Tutup pemutar mini">
+              <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"
+                ><path d="M5 5l10 10M15 5 5 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg
+              >
+            </button>
+          </div>
+        {/if}
+        {#key videoId}
+          <Player bind:this={player} {videoId} ontime={handleTime}>
+            <CaptionOverlay
+              {words}
+              w0={clip.w0}
+              w1={clip.w1}
+              clipStart={bounds.start}
+              clipEnd={bounds.end}
+              {currentTime}
+              enabled={settings.captionEnabled}
+              style={settings.captionStyle}
+              position={settings.captionPosition}
+              uppercase={settings.captionUppercase}
+            />
+          </Player>
+        {/key}
+      </div>
+    </div>
 
     <div class="side">
       <div class="duration {status}">
@@ -261,6 +308,11 @@
     onexpand={expand}
   />
 
+  {#if floating}
+    <!-- Extra room so the end of the transcript can be scrolled above the mini player. -->
+    <div class="mini-spacer" aria-hidden="true"></div>
+  {/if}
+
   {#if showExportModal}
     <ExportModal
       {clip}
@@ -312,6 +364,78 @@
   .side {
     display: grid;
     gap: 10px;
+  }
+  .player-slot {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    scroll-margin-top: 76px;
+  }
+  .player-shell {
+    position: absolute;
+    inset: 0;
+  }
+  .player-shell.floating {
+    position: fixed;
+    inset: auto 20px 20px auto;
+    width: min(380px, calc(100vw - 40px));
+    z-index: 40;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel);
+    overflow: hidden;
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.6);
+    animation: mini-in 200ms ease-out;
+  }
+  .player-shell.floating :global(.player) {
+    border-radius: 0;
+  }
+  .mini-spacer {
+    height: min(260px, 40vh);
+  }
+  .mini-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 4px 4px 12px;
+  }
+  .mini-title {
+    flex: 1;
+    font-size: 12px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .mini-btn {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text);
+  }
+  .mini-btn:hover {
+    background: var(--panel-2);
+  }
+  @media (max-width: 640px) {
+    .player-shell.floating {
+      inset: auto 12px 12px auto;
+      width: min(240px, 62vw);
+    }
+    .mini-spacer {
+      height: 200px;
+    }
+  }
+  @keyframes mini-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px) scale(0.97);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .player-shell.floating {
+      animation: none;
+    }
   }
   .duration {
     display: grid;

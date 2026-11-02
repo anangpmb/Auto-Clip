@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import type { Clip, Settings, Word } from '../lib/types';
   import {
     type AspectRatio,
@@ -10,9 +10,17 @@
     generateAss,
     generateSrt,
     generateVtt,
+    groupWordsIntoCues,
   } from '../lib/captions';
   import { clipBounds, fmtDuration, fmtTime } from '../lib/transcript';
-  import { checkExportStatus, getExportDownloadUrl, startExport, type HelperHealth } from '../lib/helper';
+  import {
+    checkExportStatus,
+    EXPORT_HELPER_VERSION,
+    getExportDownloadUrl,
+    startExport,
+    versionBefore,
+    type HelperHealth,
+  } from '../lib/helper';
   import { copyText } from '../lib/clipboard';
 
   interface Props {
@@ -55,8 +63,29 @@
   let exportMessage = $state('');
   let exportError = $state('');
   let downloadReadyUrl = $state('');
+  let exportNotes = $state<string[]>([]);
   let pollTimer: number | null = null;
   let copiedCmd = $state(false);
+
+  // Older helpers ignore `cues` (no captions) and cannot follow faces.
+  const helperOutdated = $derived(!!helperHealth?.ok && versionBefore(helperHealth.version, EXPORT_HELPER_VERSION));
+  const warnings = $derived.by(() => {
+    const out: string[] = [];
+    if (!helperHealth?.ok || helperOutdated) return out;
+    if (!helperHealth.ffmpeg) out.push('FFmpeg belum terpasang di komputer ini (Mac: brew install ffmpeg, Windows: winget install ffmpeg).');
+    if (aspectRatio === '9:16_crop' && helperHealth.face_detect === false)
+      out.push('Deteksi wajah belum terpasang di helper, jadi sementara dipakai potongan tengah. Buka ulang helper lewat launcher AutoClip untuk memasangnya.');
+    if (captionEnabled && helperHealth.captions === false)
+      out.push('Komponen caption (Pillow) belum terpasang di helper, jadi caption akan dilewati. Buka ulang helper lewat launcher AutoClip untuk memasangnya.');
+    return out;
+  });
+
+  // Same grouping as the editor preview (CaptionOverlay), so the video matches what you saw.
+  const cues = $derived(captionEnabled ? groupWordsIntoCues(clipWords, bounds.start, bounds.end, { uppercase }) : []);
+
+  onDestroy(() => {
+    if (pollTimer) clearInterval(pollTimer);
+  });
 
   const safeTitle = $derived(
     clip.title.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_') || 'klip'
@@ -97,6 +126,7 @@
     exportProgress = 5;
     exportMessage = 'Mengirim permintaan ke helper...';
     exportError = '';
+    exportNotes = [];
     downloadReadyUrl = '';
 
     try {
@@ -109,8 +139,7 @@
         aspectRatio,
         captionStyle: captionEnabled ? captionStyle : 'none',
         captionPosition,
-        assContent,
-        srtContent,
+        cues,
       });
 
       pollTimer = window.setInterval(async () => {
@@ -123,6 +152,7 @@
             stopExport();
             exportProgress = 100;
             exportMessage = 'Selesai! Mengunduh video...';
+            exportNotes = status.notes ?? [];
             const dlUrl = getExportDownloadUrl(settings.helperUrl, jobId);
             downloadReadyUrl = dlUrl;
 
@@ -136,6 +166,7 @@
           } else if (status.status === 'error') {
             stopExport();
             exportError = status.error || 'Terjadi kesalahan saat memproses ekspor.';
+            exportNotes = status.notes ?? [];
           }
         } catch (e) {
           stopExport();
@@ -207,10 +238,10 @@
 
           <label class="radio-card" class:checked={aspectRatio === '9:16_crop'}>
             <input type="radio" name="aspectRatio" value="9:16_crop" bind:group={aspectRatio} />
-            <div class="card-icon">📐</div>
+            <div class="card-icon">🎯</div>
             <div class="card-info">
-              <span class="card-name">9:16 Vertikal (Center Crop)</span>
-              <span class="card-desc">Potongan tengah vertikal penuh layar.</span>
+              <span class="card-name">9:16 Vertikal (Ikuti Wajah)</span>
+              <span class="card-desc">Penuh layar. Kamera otomatis mengikuti wajah supaya subjek selalu ada di dalam frame.</span>
             </div>
           </label>
 
@@ -297,7 +328,7 @@
       <div class="export-box">
         <div class="export-box-head">
           <h3>⚡ Render & Unduh Video MP4 Langsung</h3>
-          <p>Helper akan mengunduh segmen klip dan menyematkan auto caption menggunakan FFmpeg.</p>
+          <p>Helper mengunduh segmen klip (maks. 1080p), mengikuti wajah untuk potongan vertikal, lalu menyematkan caption.</p>
         </div>
 
         {#if isExporting}
@@ -316,15 +347,19 @@
             <a href={downloadReadyUrl} class="button primary" download="{safeTitle}.mp4">Unduh Lagi (MP4)</a>
           </div>
         {:else}
-          {#if helperOk}
-            <button class="primary large-btn" onclick={handleStartExport}>
+          {#if helperOk && helperOutdated}
+            <div class="warn-box">
+              ⚠️ Helper kamu versi {helperHealth?.version ?? 'lama'}; ekspor butuh versi {EXPORT_HELPER_VERSION} atau lebih baru.
+              Tutup helper, lalu buka lagi lewat launcher AutoClip (Mac: otomatis mengambil versi terbaru). Di Windows, unduh
+              <a href="./autoclip_helper.py" download>autoclip_helper.py</a> terbaru ke folder helper.
+            </div>
+          {:else if helperOk}
+            <button class="primary large-btn" onclick={handleStartExport} disabled={!helperHealth?.ffmpeg}>
               🚀 Mulai Render Video ({aspectRatio.startsWith('9:16') ? '9:16' : '16:9'})
             </button>
-            {#if helperHealth && !helperHealth.ffmpeg_subtitles}
-              <div class="note-box">
-                ℹ️ FFmpeg terdeteksi tanpa filter libass. Helper akan mengekspor video MP4 dengan subtitle tertanam (soft subtitles).
-              </div>
-            {/if}
+            {#each warnings as w (w)}
+              <div class="note-box">ℹ️ {w}</div>
+            {/each}
           {:else}
             <div class="warn-box">
               ⚠️ Helper belum terhubung di <code>{settings.helperUrl}</code>. Jalankan helper di komputer kamu untuk render otomatis satu klik.
@@ -335,6 +370,9 @@
         {#if exportError}
           <div class="error-msg">{exportError}</div>
         {/if}
+        {#each exportNotes as n (n)}
+          <div class="note-box">ℹ️ {n}</div>
+        {/each}
       </div>
 
       <!-- Section 4: Subtitle Files Download -->
@@ -356,6 +394,10 @@
             {copiedCmd ? '✓ Disalin!' : 'Salin Perintah'}
           </button>
         </div>
+        <p class="desc">
+          Untuk dijalankan sendiri di terminal. Perintah ini memakai potongan tengah (tanpa deteksi wajah) dan butuh FFmpeg dengan
+          libass untuk caption.
+        </p>
         <pre class="cmd-block"><code>{exportCmd}</code></pre>
       </div>
     </div>

@@ -14,7 +14,11 @@ Safari needs that: it blocks https pages (GitHub Pages) from calling http://127.
 from __future__ import annotations
 
 import argparse
+import atexit
+import hashlib
+import importlib.util
 import json
+import math
 import os
 import re
 import shutil
@@ -31,7 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DEFAULT_PORT = 8765
 DEV_ORIGINS = {
     "http://localhost:5173",
@@ -351,6 +355,26 @@ def fetch_app_file(path: str) -> tuple[int, str, bytes]:
 
 
 # ------------------------------------------------------------- export ---
+#
+# Export pipeline: download the clip section (<=1080p), find the faces so a vertical
+# crop keeps the subject in frame, draw the captions with Pillow (no libass needed,
+# so it works with any ffmpeg build) and render the final MP4 in one ffmpeg pass.
+
+DATA_DIR = os.path.join(os.path.expanduser("~"), ".autoclip")
+YUNET_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+YUNET_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+OPTIONAL_PACKAGES = (("cv2", "opencv-python-headless"), ("PIL", "pillow"))
+ASPECTS = ("16:9", "9:16_blur", "9:16_crop")
+CAPTION_STYLES = ("viral", "box", "classic", "neon", "none")
+POSITIONS = ("bottom", "center", "top")
+MAX_CLIP_SECONDS = 10 * 60
+JOB_TTL = 2 * 60 * 60  # finished exports stay downloadable this long
+SAMPLE_STEP = 0.25  # seconds between frames checked for faces
+
+_export_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+_render_slot = threading.Semaphore(1)  # one export at a time keeps the computer usable
+
 
 def get_ffmpeg_path() -> str | None:
     for candidate in (
@@ -364,177 +388,731 @@ def get_ffmpeg_path() -> str | None:
     return None
 
 
-def ffmpeg_has_subtitles() -> bool:
-    bin_path = get_ffmpeg_path()
-    if not bin_path:
-        return False
-    try:
-        res = subprocess.run([bin_path, "-filters"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
-        out = (res.stdout or "") + (res.stderr or "")
-        return "subtitles" in out or "ass" in out
-    except Exception:
-        return False
+def has_module(name: str) -> bool:
+    return importlib.util.find_spec(name) is not None
 
 
 def safe_filename(name: str) -> str:
-    cleaned = re.sub(r'[\\/:*?"<>|]+', '', name).strip()
+    cleaned = re.sub(r'[\\/:*?"<>|]+', "", name).strip()
     return cleaned[:80] or "klip"
 
 
-_export_jobs: dict[str, dict] = {}
-_jobs_lock = threading.Lock()
-
-
-def _run_export_job(job_id: str, params: dict):
+def _update(job: dict, **fields):
     with _jobs_lock:
-        job = _export_jobs.get(job_id)
-    if not job:
-        return
+        job.update(fields)
 
-    url = clean_url(params.get("url", ""))
-    start = max(0.0, float(params.get("start", 0)))
-    end = max(start + 0.1, float(params.get("end", 0)))
-    title = params.get("title") or "klip"
-    aspect_ratio = params.get("aspectRatio") or "16:9"
-    caption_style = params.get("captionStyle") or "viral"
-    ass_content = params.get("assContent") or ""
-    srt_content = params.get("srtContent") or ""
 
-    tmpdir = tempfile.mkdtemp(prefix="autoclip_")
-    job["tmpdir"] = tmpdir
-    base_name = safe_filename(title)
-    job["filename"] = f"{base_name}.mp4"
-
-    try:
-        # Step 1: Download video section
-        with _jobs_lock:
-            job["status"] = "downloading"
-            job["progress"] = 20
-            job["message"] = "Mengunduh segmen video..."
-
-        ytdlp_cmd = [sys.executable, "-m", "yt_dlp"]
-        if shutil.which("yt-dlp"):
-            ytdlp_cmd = [shutil.which("yt-dlp")]
-
-        raw_template = os.path.join(tmpdir, "raw.%(ext)s")
-        cmd = ytdlp_cmd + [
-            "--download-sections", f"*{start:.2f}-{end:.2f}",
-            "--force-keyframes-at-cuts",
-            "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
-            "--no-playlist",
-            "-o", raw_template,
-            url,
+def _purge_old_jobs():
+    now = time.time()
+    with _jobs_lock:
+        old = [
+            jid for jid, j in _export_jobs.items()
+            if j.get("status") in ("done", "error") and now - j.get("created_at", now) > JOB_TTL
         ]
-        if CFG.cookies_file:
-            cmd.extend(["--cookies", CFG.cookies_file])
-        if CFG.cookies_from_browser:
-            cmd.extend(["--cookies-from-browser", CFG.cookies_from_browser])
+        dirs = [_export_jobs.pop(jid).get("tmpdir") for jid in old]
+    for d in dirs:
+        if d:
+            shutil.rmtree(d, ignore_errors=True)
 
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=240)
-        if res.returncode != 0:
-            err_msg = friendly_error(Exception(res.stderr or res.stdout or "Gagal mengunduh dengan yt-dlp."))
-            raise UserError(err_msg)
 
-        raw_files = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.startswith("raw.")]
-        if not raw_files:
-            raise UserError("Video mentah tidak berhasil diunduh.")
-        raw_input = raw_files[0]
+def _cleanup_all_jobs():
+    for job in list(_export_jobs.values()):
+        if job.get("tmpdir"):
+            shutil.rmtree(job["tmpdir"], ignore_errors=True)
+
+
+def probe_video(ffmpeg_bin: str, path: str) -> tuple[int, int, float]:
+    """Width, height and duration, read from ffmpeg's own banner (no ffprobe needed)."""
+    res = subprocess.run(
+        [ffmpeg_bin, "-hide_banner", "-i", path], capture_output=True, text=True, errors="replace", timeout=60
+    )
+    size = re.search(r"Video:.*?\b(\d{2,5})x(\d{2,5})\b", res.stderr)
+    dur = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", res.stderr)
+    if not size:
+        raise UserError("Video hasil unduhan tidak bisa dibaca.")
+    duration = int(dur.group(1)) * 3600 + int(dur.group(2)) * 60 + float(dur.group(3)) if dur else 0.0
+    return int(size.group(1)), int(size.group(2)), duration
+
+
+def download_section(url: str, start: float, end: float, tmpdir: str, ffmpeg_bin: str) -> str:
+    opts = ydl_options()
+    opts.pop("skip_download", None)
+    opts.pop("extract_flat", None)
+    opts.update({
+        "outtmpl": os.path.join(tmpdir, "raw.%(ext)s"),
+        # A 1080p source is plenty for a vertical clip, and H.264 decodes fastest.
+        "format": "bv*+ba/b",
+        "format_sort": ["res:1080", "vcodec:h264", "acodec:m4a"],
+        "merge_output_format": "mp4",
+        "download_ranges": yt_dlp.utils.download_range_func(None, [(start, end)]),
+        # Exact cut points need a re-encode; keep it fast and near-lossless.
+        "force_keyframes_at_cuts": True,
+        "external_downloader_args": {
+            "ffmpeg_o": ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "17", "-c:a", "aac", "-b:a", "192k"],
+        },
+        "ffmpeg_location": ffmpeg_bin,
+        "noprogress": True,
+        "socket_timeout": 30,
+    })
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+    except DownloadError as e:
+        raise UserError(friendly_error(e)) from e
+    files = [f for f in os.listdir(tmpdir) if f.startswith("raw.") and not f.endswith((".part", ".ytdl"))]
+    if not files:
+        raise UserError("Segmen video tidak berhasil diunduh.")
+    return os.path.join(tmpdir, files[0])
+
+
+# -- faces -----------------------------------------------------------------
+
+def yunet_model_path() -> str | None:
+    """The YuNet face model (~230 KB), downloaded once and checked against a pinned hash."""
+    path = os.path.join(DATA_DIR, "models", "face_detection_yunet_2023mar.onnx")
+    if os.path.isfile(path):
+        return path
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        req = urllib.request.Request(YUNET_URL, headers={"User-Agent": f"AutoClipHelper/{VERSION}"})
+        with urllib.request.urlopen(req, timeout=30, context=_SSL) as r:
+            data = r.read()
+        if hashlib.sha256(data).hexdigest() != YUNET_SHA256:
+            sys.stderr.write("[helper] model wajah tidak cocok dengan hash yang diharapkan; dilewati\n")
+            return None
+        with open(path + ".part", "wb") as f:
+            f.write(data)
+        os.replace(path + ".part", path)
+        return path
+    except OSError as e:
+        sys.stderr.write(f"[helper] gagal mengunduh model wajah: {e}\n")
+        return None
+
+
+class FaceDetector:
+    """YuNet when its model is available, otherwise OpenCV's bundled Haar cascade."""
+
+    def __init__(self):
+        import cv2
+
+        self.cv2 = cv2
+        self.yunet = None
+        self.haar = None
+        model = yunet_model_path()
+        if model:
+            try:
+                self.yunet = cv2.FaceDetectorYN.create(model, "", (320, 320), 0.6, 0.3, 50)
+            except cv2.error as e:
+                sys.stderr.write(f"[helper] YuNet tidak bisa dimuat: {e}\n")
+        if self.yunet is None:
+            cascades = getattr(getattr(cv2, "data", None), "haarcascades", "")
+            self.haar = cv2.CascadeClassifier(os.path.join(cascades, "haarcascade_frontalface_default.xml"))
+
+    def detect(self, img) -> list[tuple[float, float, float, float, float]]:
+        """Faces as (x, y, w, h, confidence) in img pixels."""
+        h, w = img.shape[:2]
+        if self.yunet is not None:
+            self.yunet.setInputSize((w, h))
+            _, faces = self.yunet.detect(img)
+            if faces is None:
+                return []
+            return [(float(f[0]), float(f[1]), float(f[2]), float(f[3]), float(f[14])) for f in faces]
+        if self.haar is None or self.haar.empty():
+            return []
+        gray = self.cv2.cvtColor(img, self.cv2.COLOR_BGR2GRAY)
+        found = self.haar.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(int(w * 0.04),) * 2)
+        return [(float(x), float(y), float(fw), float(fh), 1.0) for x, y, fw, fh in found]
+
+
+def analyze_faces(path: str, duration: float, on_progress) -> tuple[list[dict], int]:
+    """Faces and scene cuts sampled every SAMPLE_STEP seconds, plus the frame width."""
+    import cv2
+
+    detector = FaceDetector()
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        raise UserError("Video tidak bisa dibaca untuk deteksi wajah.")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    iw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    ih = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    step = max(1, round(fps * SAMPLE_STEP))
+    scale = min(1.0, 640 / max(iw, 1))
+    samples: list[dict] = []
+    prev_tiny = None
+    diffs: list[float] = []
+    idx = 0
+    try:
+        while cap.grab():
+            ok, frame = cap.retrieve()
+            if not ok:
+                idx += 1
+                continue
+            # Shot changes are found frame by frame: consecutive frames of one shot look alike,
+            # so a jump in the difference well above the recent level is a cut.
+            tiny = cv2.cvtColor(cv2.resize(frame, (64, 36), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+            cut = False
+            if prev_tiny is not None:
+                diff = float(cv2.absdiff(tiny, prev_tiny).mean())
+                recent = sorted(diffs[-25:])
+                typical = recent[len(recent) // 2] if recent else 0.0
+                cut = diff > 18 and diff > 4 * max(typical, 2.0)
+                diffs.append(diff)
+            prev_tiny = tiny
+            # Check faces every SAMPLE_STEP, and right after every cut.
+            if idx % step == 0 or cut:
+                small = cv2.resize(frame, (round(iw * scale), round(ih * scale))) if scale < 1 else frame
+                faces = [
+                    (x / scale, y / scale, w / scale, h / scale, c)
+                    for x, y, w, h, c in detector.detect(small)
+                    if w / scale >= 0.03 * iw  # ignore tiny faces in the background
+                ]
+                t = idx / fps
+                samples.append({"t": t, "faces": faces, "cut": cut})
+                if duration > 0 and len(samples) % 8 == 0:
+                    on_progress(min(1.0, t / duration))
+            idx += 1
+    finally:
+        cap.release()
+    return samples, iw
+
+
+def _subject_centers(samples: list[dict], crop_w: float) -> list[tuple[float, float] | None]:
+    """(centre x, width) of what to keep in frame for each sample; None when no face is visible."""
+    targets: list[tuple[float, float] | None] = []
+    current: tuple[float, float] | None = None  # (centre x, width) of the face being followed
+    challenger: float | None = None
+    streak = 0
+    for s in samples:
+        if s["cut"]:
+            current, challenger, streak = None, None, 0
+        faces = s["faces"]
+        if not faces:
+            targets.append(None)
+            continue
+        biggest = max(f[2] * f[3] for f in faces)
+        main = [f for f in faces if f[2] * f[3] >= 0.35 * biggest]
+        left = min(f[0] for f in main)
+        right = max(f[0] + f[2] for f in main)
+        if len(main) > 1 and right - left <= 0.85 * crop_w:
+            # Everyone who matters fits in the crop: frame the whole group.
+            current = ((left + right) / 2, right - left)
+            targets.append(current)
+            continue
+
+        def weight(f):
+            return f[2] * f[3] * f[4]
+
+        best = max(main, key=weight)
+        if current is not None:
+            # Look among all faces: the person we follow may briefly look smaller.
+            same = [f for f in faces if abs(f[0] + f[2] / 2 - current[0]) < max(current[1], f[2])]
+            if same:
+                stay = max(same, key=weight)
+                if stay is not best:
+                    # Someone else is more prominent; only switch if that lasts ~0.75 s.
+                    bcx = best[0] + best[2] / 2
+                    streak = streak + 1 if challenger is not None and abs(challenger - bcx) < best[2] else 1
+                    challenger = bcx
+                    if streak < 3:
+                        best = stay
+                    else:
+                        streak, challenger = 0, None
+                else:
+                    streak, challenger = 0, None
+        current = (best[0] + best[2] / 2, best[2])
+        targets.append(current)
+    return targets
+
+
+def _median3(values: list[float]) -> list[float]:
+    """Centred 3-point median: drops single-sample glitches without lagging behind real moves."""
+    if len(values) < 3:
+        return list(values)
+    inner = [sorted(values[k - 1: k + 2])[1] for k in range(1, len(values) - 1)]
+    return [values[0], *inner, values[-1]]
+
+
+def _simplify(points: list[tuple[float, float]], tol: float) -> list[tuple[float, float]]:
+    """Ramer-Douglas-Peucker on (t, x), measuring the error in x only."""
+    if len(points) < 3:
+        return points
+    (t0, x0), (t1, x1) = points[0], points[-1]
+    worst, index = 0.0, 0
+    for i in range(1, len(points) - 1):
+        t, x = points[i]
+        expected = x0 + (x1 - x0) * ((t - t0) / (t1 - t0) if t1 > t0 else 0)
+        if abs(x - expected) > worst:
+            worst, index = abs(x - expected), i
+    if worst <= tol:
+        return [points[0], points[-1]]
+    return _simplify(points[: index + 1], tol)[:-1] + _simplify(points[index:], tol)
+
+
+def plan_crop_path(samples: list[dict], iw: int, crop_w: int) -> list[tuple[float, float]]:
+    """Keyframes (t, x) for the left edge of a crop window that follows the subject."""
+    max_x = max(0.0, iw - crop_w)
+    if not samples:
+        return [(0.0, max_x / 2)]
+    subjects = _subject_centers(samples, crop_w)
+
+    # Split into shots; within a shot fill gaps with the nearest known subject.
+    scenes: list[list[int]] = []
+    for i, s in enumerate(samples):
+        if i == 0 or s["cut"]:
+            scenes.append([])
+        scenes[-1].append(i)
+
+    keys: list[tuple[float, float]] = []
+    deadzone = 0.06 * crop_w
+    speed = 1.0 * crop_w  # px per second
+    for scene in scenes:
+        known = [subjects[i] for i in scene if subjects[i] is not None]
+        if not known:
+            want = [(iw / 2, 0.0)] * len(scene)
+        else:
+            want, last = [], known[0]
+            for i in scene:
+                last = subjects[i] or last
+                want.append(last)
+        centers = _median3([c for c, _ in want])
+        widths = [w for _, w in want]
+        targets = [min(max_x, max(0.0, c - crop_w / 2)) for c in centers]
+
+        def bounds(k):
+            """Crop positions that keep the whole subject inside, with a small margin.
+
+            Uses the raw detection, not the smoothed centre: smoothing steers the camera,
+            but must never push a real face out of frame.
+            """
+            c, w = want[k][0], min(widths[k], crop_w)
+            margin = min(0.1 * crop_w, (crop_w - w) / 2)
+            lo, hi = c + w / 2 + margin - crop_w, c - w / 2 - margin
+            return min(max_x, max(0.0, lo)), min(max_x, max(0.0, hi))
+
+        # A virtual camera: it ignores small movements and pans smoothly to follow big ones,
+        # but never lets the subject slip out of frame (a sudden jump is followed at once).
+        cam = min(max(targets[0], bounds(0)[0]), bounds(0)[1])
+        if keys:
+            keys.append((samples[scene[0]]["t"] - 0.001, keys[-1][1]))  # hold until the cut, then jump
+        points = [(samples[scene[0]]["t"], cam)]
+        for k in range(1, len(scene)):
+            dt = samples[scene[k]]["t"] - samples[scene[k - 1]]["t"]
+            gap = targets[k] - cam
+            if abs(gap) > deadzone:
+                cam += math.copysign(min(abs(gap) - deadzone, speed * dt), gap)
+            lo, hi = bounds(k)
+            cam = min(max(cam, lo), hi)
+            points.append((samples[scene[k]]["t"], cam))
+        keys.extend(_simplify(points, max(2.0, 0.01 * crop_w)))
+    if keys[0][0] > 0:
+        keys.insert(0, (0.0, keys[0][1]))
+    return keys
+
+
+def crop_x_expression(keys: list[tuple[float, float]]) -> str:
+    """Piecewise-linear x(t) as a flat sum of clamped ramps (ffmpeg crop evaluates it per frame).
+
+    A flat sum avoids deeply nested if() calls. The caller wraps it in single quotes,
+    which protects the commas inside the filtergraph.
+    """
+    parts = [f"{keys[0][1]:.1f}"]
+    for (ta, xa), (tb, xb) in zip(keys, keys[1:]):
+        dx = xb - xa
+        if abs(dx) >= 0.5:
+            parts.append(f"{dx:+.1f}*clip((t-{ta:.3f})/{max(tb - ta, 0.001):.3f},0,1)")
+    return "".join(parts)
+
+
+# -- captions --------------------------------------------------------------
+
+_FONT_FILES = (
+    "/System/Library/Fonts/Supplemental/Arial Black.ttf",
+    "/Library/Fonts/Arial Black.ttf",
+    os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", "ariblk.ttf"),
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", "arialbd.ttf"),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+)
+_font_cache: dict[int, object] = {}
+
+
+def caption_font(size: int):
+    from PIL import ImageFont
+
+    if size not in _font_cache:
+        font = None
+        for path in _FONT_FILES:
+            if os.path.isfile(path):
+                try:
+                    font = ImageFont.truetype(path, size)
+                    break
+                except OSError:
+                    continue
+        _font_cache[size] = font or ImageFont.load_default(size=size)
+    return _font_cache[size]
+
+
+# Colours follow the editor preview (CaptionOverlay.svelte).
+STYLE_LOOK = {
+    "viral": {"size": 0.063, "stroke": (0, 0, 0, 255), "stroke_w": 0.09, "active": (250, 204, 21, 255), "active_bg": (0, 0, 0, 110)},
+    "neon": {"size": 0.063, "stroke": (30, 27, 75, 255), "stroke_w": 0.09, "active": (34, 211, 238, 255), "glow": (34, 211, 238, 230)},
+    "box": {"size": 0.054, "stroke": None, "stroke_w": 0, "active": (253, 224, 71, 255), "box": (0, 0, 0, 199), "underline": True},
+    "classic": {"size": 0.05, "stroke": (0, 0, 0, 200), "stroke_w": 0.05, "active": None, "shadow": True},
+}
+
+
+class CaptionRenderer:
+    """Draws caption states into same-sized transparent PNG bands for ffmpeg's overlay."""
+
+    def __init__(self, style: str, position: str, out_w: int, out_h: int):
+        self.look = STYLE_LOOK[style]
+        self.out_w, self.out_h = out_w, out_h
+        vertical = out_h > out_w
+        self.size = round(self.look["size"] * min(out_w, out_h) * (1.0 if vertical else 0.82))
+        self.font = caption_font(self.size)
+        self.space = self.font.getlength(" ")
+        self.line_h = round(self.size * 1.3)
+        self.max_w = 0.85 * out_w - (0.8 * self.size if self.look.get("box") else 0)
+        self.stroke = max(1, round(self.look["stroke_w"] * self.size)) if self.look["stroke"] else 0
+        self.pad = round(self.size * 0.6)
+        self.position = position
+        self.margin = round(out_h * (0.14 if vertical else 0.08))
+
+    def _lines(self, words: list[str]) -> list[list[int]]:
+        lines: list[list[int]] = []
+        cur: list[int] = []
+        width = 0.0
+        for i, w in enumerate(words):
+            ww = self.font.getlength(w)
+            add = ww if not cur else self.space + ww
+            if cur and width + add > self.max_w:
+                lines.append(cur)
+                cur, width, add = [], 0.0, ww
+            cur.append(i)
+            width += add
+        if cur:
+            lines.append(cur)
+        return lines
+
+    def band(self, all_words: list[list[str]]) -> tuple[int, int]:
+        """Top y and height of one band that fits every caption."""
+        tallest = max((len(self._lines(ws)) for ws in all_words), default=1) * self.line_h
+        height = tallest + 2 * self.pad
+        if self.position == "top":
+            top = self.margin - self.pad
+        elif self.position == "center":
+            top = (self.out_h - height) // 2
+        else:
+            top = self.out_h - self.margin + self.pad - height
+        top = max(0, min(self.out_h - height, top))
+        return top - top % 2, height + height % 2
+
+    def render(self, words: list[str], active: int | None, band_h: int):
+        from PIL import Image, ImageDraw, ImageFilter
+
+        look = self.look
+        lines = self._lines(words)
+        widths = [sum(self.font.getlength(words[i]) for i in ln) + self.space * (len(ln) - 1) for ln in lines]
+        block_h = len(lines) * self.line_h
+        if self.position == "top":
+            y0 = self.pad
+        elif self.position == "center":
+            y0 = (band_h - block_h) // 2
+        else:
+            y0 = band_h - self.pad - block_h
+
+        back = Image.new("RGBA", (self.out_w, band_h), (0, 0, 0, 0))
+        front = Image.new("RGBA", (self.out_w, band_h), (0, 0, 0, 0))
+        bd, fd = ImageDraw.Draw(back), ImageDraw.Draw(front)
+        if look.get("box"):
+            px, py = 0.4 * self.size, 0.2 * self.size
+            bw = max(widths)
+            bd.rounded_rectangle(
+                [(self.out_w - bw) / 2 - px, y0 - py, (self.out_w + bw) / 2 + px, y0 + block_h + py],
+                radius=0.25 * self.size, fill=look["box"],
+            )
+
+        placed = []  # (x, y, text, is_active)
+        for li, ln in enumerate(lines):
+            x = (self.out_w - widths[li]) / 2
+            y = y0 + li * self.line_h + (self.line_h - self.size) / 2
+            for i in ln:
+                placed.append((x, y, words[i], i == active))
+                x += self.font.getlength(words[i]) + self.space
+
+        for x, y, text, is_active in placed:
+            if look.get("shadow"):
+                bd.text((x, y + 0.06 * self.size), text, font=self.font, fill=(0, 0, 0, 220))
+            if is_active and look["active"]:
+                if look.get("active_bg"):
+                    # Hug the drawn glyphs, not the font's line box.
+                    p = 0.18 * self.size
+                    gl, gt, gr, gb = self.font.getbbox(text)
+                    bd.rounded_rectangle([x + gl - p, y + gt - 0.7 * p, x + gr + p, y + gb + 0.7 * p],
+                                         radius=0.2 * self.size, fill=look["active_bg"])
+                if look.get("glow"):
+                    bd.text((x, y), text, font=self.font, fill=look["glow"],
+                            stroke_width=self.stroke * 2, stroke_fill=look["glow"])
+        if look.get("glow") or look.get("shadow"):
+            # Only glow/shadow text lives on the back layer for these styles, so blurring it is safe.
+            back = back.filter(ImageFilter.GaussianBlur(0.12 * self.size if look.get("glow") else 0.05 * self.size))
+
+        for x, y, text, is_active in placed:
+            colour = look["active"] if is_active and look["active"] else (255, 255, 255, 255)
+            fd.text((x, y), text, font=self.font, fill=colour,
+                    stroke_width=self.stroke, stroke_fill=look["stroke"] or colour)
+            if is_active and look.get("underline"):
+                uy = y + self.font.getbbox(text)[3] + 0.1 * self.size
+                fd.line([x, uy, x + self.font.getlength(text), uy], fill=colour, width=max(2, round(0.06 * self.size)))
+        return Image.alpha_composite(back, front)
+
+
+def _clean_cues(raw) -> list[dict]:
+    cues: list[dict] = []
+    if not isinstance(raw, list):
+        return cues
+    try:
+        for c in raw[:600]:
+            words = []
+            for w in (c.get("words") or [])[:40]:
+                text = str(w.get("text", "")).strip()[:40]
+                if text:
+                    words.append({"start": float(w.get("start", 0)), "end": float(w.get("end", 0)), "text": text})
+            if words:
+                cues.append({
+                    "start": float(c.get("start", words[0]["start"])),
+                    "end": float(c.get("end", words[-1]["end"])),
+                    "words": words,
+                })
+    except (TypeError, ValueError, AttributeError) as e:
+        raise UserError("Data caption tidak valid.") from e
+    return cues
+
+
+def caption_states(cues: list[dict], highlight: bool) -> list[tuple[float, float, list[str], int | None]]:
+    """(start, end, words, active word) intervals; the active word follows the speech."""
+    states = []
+    for cue in cues:
+        ws = cue["words"]
+        texts = [w["text"] for w in ws]
+        cs, ce = cue["start"], max(cue["end"], cue["start"] + 0.05)
+        if not highlight:
+            states.append((cs, ce, texts, None))
+            continue
+        if ws[0]["start"] > cs + 0.02:
+            states.append((cs, ws[0]["start"], texts, None))
+        for i, w in enumerate(ws):
+            a = max(cs, w["start"])
+            b = ws[i + 1]["start"] if i + 1 < len(ws) else ce
+            if b > a:
+                states.append((a, min(b, ce), texts, i))
+    states.sort(key=lambda s: s[0])
+    return states
+
+
+def render_caption_track(cues: list[dict], style: str, position: str, out_w: int, out_h: int, tmpdir: str):
+    """PNG bands plus an ffconcat playlist that shows each one at the right time."""
+    from PIL import Image
+
+    renderer = CaptionRenderer(style, position, out_w, out_h)
+    states = caption_states(cues, highlight=style != "classic")
+    if not states:
+        return None
+    band_y, band_h = renderer.band([s[2] for s in states])
+    Image.new("RGBA", (out_w, band_h), (0, 0, 0, 0)).save(os.path.join(tmpdir, "cap_blank.png"))
+    lines = ["ffconcat version 1.0"]
+    clock = 0.0
+    for n, (a, b, words, active) in enumerate(states):
+        a = max(a, clock)
+        if b - a < 0.001:
+            continue
+        if a - clock >= 0.001:
+            lines += ["file 'cap_blank.png'", f"duration {a - clock:.3f}"]
+        name = f"cap_{n:05d}.png"
+        renderer.render(words, active, band_h).save(os.path.join(tmpdir, name), compress_level=1)
+        lines += [f"file '{name}'", f"duration {b - a:.3f}"]
+        clock = b
+    # The concat demuxer ignores the last duration, so finish on a repeated blank.
+    lines += ["file 'cap_blank.png'", "duration 1.000", "file 'cap_blank.png'"]
+    playlist = os.path.join(tmpdir, "captions.ffconcat")
+    with open(playlist, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return playlist, band_y
+
+
+# -- render ----------------------------------------------------------------
+
+def run_ffmpeg(cmd: list[str], duration: float, tmpdir: str, on_progress):
+    """Run ffmpeg with -progress on stdout; the log goes to a file to avoid pipe stalls."""
+    log_path = os.path.join(tmpdir, "ffmpeg.log")
+    timeout = max(300.0, duration * 20)
+    started = time.time()
+    with open(log_path, "w", encoding="utf-8", errors="replace") as log:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=log, text=True, errors="replace", cwd=tmpdir)
+        try:
+            for line in proc.stdout:
+                if line.startswith("out_time_us=") and duration > 0:
+                    try:
+                        on_progress(min(1.0, int(line.split("=", 1)[1]) / 1e6 / duration))
+                    except ValueError:
+                        pass
+                if time.time() - started > timeout:
+                    proc.kill()
+                    raise UserError("Render terlalu lama dan dihentikan. Coba klip yang lebih pendek.")
+            proc.wait()
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+    if proc.returncode != 0:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            tail = f.read().splitlines()[-30:]
+        reason = next(
+            (ln.strip() for ln in reversed(tail) if re.search(r"error|invalid|no such|not found|failed", ln, re.I)),
+            tail[-1].strip() if tail else "tanpa keterangan",
+        )
+        raise UserError(f"FFmpeg gagal merender video: {reason[:300]}")
+
+
+def _run_export_job(job: dict, params: dict):
+    notes: list[str] = []
+    try:
+        url = clean_url(str(params.get("url", "")))
+        start = max(0.0, float(params.get("start", 0)))
+        end = float(params.get("end", 0))
+        aspect = params.get("aspectRatio") if params.get("aspectRatio") in ASPECTS else "9:16_blur"
+        style = params.get("captionStyle") if params.get("captionStyle") in CAPTION_STYLES else "viral"
+        position = params.get("captionPosition") if params.get("captionPosition") in POSITIONS else "bottom"
+        cues = _clean_cues(params.get("cues")) if style != "none" else []
+        if end - start < 0.5:
+            raise UserError("Klip terlalu pendek untuk diekspor.")
+        if end - start > MAX_CLIP_SECONDS:
+            raise UserError("Klip lebih dari 10 menit. Pendekkan dulu sebelum diekspor.")
 
         ffmpeg_bin = get_ffmpeg_path()
         if not ffmpeg_bin:
-            with _jobs_lock:
-                job["status"] = "done"
-                job["progress"] = 100
-                job["message"] = "Selesai (tanpa FFmpeg)"
-                job["output_file"] = raw_input
-            return
+            raise UserError("FFmpeg belum terpasang. Mac: brew install ffmpeg. Windows: winget install ffmpeg.")
 
-        with _jobs_lock:
-            job["status"] = "rendering"
-            job["progress"] = 55
-            job["message"] = "Merender video & caption..."
+        if not _render_slot.acquire(blocking=False):
+            _update(job, status="pending", message="Menunggu ekspor lain selesai...")
+            _render_slot.acquire()
+        try:
+            tmpdir = job["tmpdir"]
+            _update(job, status="downloading", progress=8, message="Mengunduh segmen video (maks. 1080p)...")
+            raw = download_section(url, start, end, tmpdir, ffmpeg_bin)
+            iw, ih, duration = probe_video(ffmpeg_bin, raw)
+            duration = duration or (end - start)
 
-        sub_file = None
-        has_sub_filter = ffmpeg_has_subtitles()
-        if caption_style != "none":
-            if ass_content:
-                sub_file = os.path.join(tmpdir, "sub.ass")
-                with open(sub_file, "w", encoding="utf-8") as f:
-                    f.write(ass_content)
-            elif srt_content:
-                sub_file = os.path.join(tmpdir, "sub.srt")
-                with open(sub_file, "w", encoding="utf-8") as f:
-                    f.write(srt_content)
+            vertical = aspect != "16:9"
+            out_w, out_h = (1080, 1920) if vertical else (1920, 1080)
+            layout = {"16:9": "fit", "9:16_blur": "blur", "9:16_crop": "crop"}[aspect]
+            crop_w = round(ih * 9 / 16) // 2 * 2
+            if layout == "crop" and crop_w > iw:
+                layout = "blur"  # the source is already narrower than 9:16
+                notes.append("Video sumber sudah vertikal, jadi dipakai latar blur.")
 
-        final_output = os.path.join(tmpdir, "final.mp4")
+            crop_expr = None
+            if layout == "crop":
+                if has_module("cv2"):
+                    _update(job, status="analyzing", progress=35, message="Mendeteksi wajah...")
+                    samples, _ = analyze_faces(
+                        raw, duration, lambda f: _update(job, progress=35 + round(20 * f))
+                    )
+                    keys = plan_crop_path(samples, iw, crop_w)
+                    if not any(s["faces"] for s in samples):
+                        notes.append("Tidak ada wajah terdeteksi, jadi dipakai potongan tengah.")
+                    crop_expr = crop_x_expression(keys)
+                else:
+                    notes.append("Deteksi wajah belum terpasang, jadi dipakai potongan tengah.")
+                    crop_expr = f"{(iw - crop_w) / 2:.1f}"
 
-        vf_filter = ""
-        filter_complex = ""
-        is_complex = False
+            captions = None
+            if cues:
+                if has_module("PIL"):
+                    _update(job, status="rendering", progress=56, message="Membuat caption...")
+                    captions = render_caption_track(cues, style, position, out_w, out_h, tmpdir)
+                else:
+                    notes.append("Caption dilewati karena Pillow belum terpasang.")
 
-        if aspect_ratio == "9:16_blur":
-            is_complex = True
-            filter_complex = (
-                "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];"
-                "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease[fg];"
-                "[bg][fg]overlay=(W-w)/2:(H-h)/2"
-            )
-            if sub_file and has_sub_filter:
-                escaped_sub = sub_file.replace("\\", "/").replace(":", "\\:")
-                filter_complex += f"[vmid];[vmid]subtitles='{escaped_sub}'[vout]"
+            if layout == "crop":
+                graph = f"[0:v]crop=w={crop_w}:h={ih}:x='{crop_expr}':y=0,scale={out_w}:{out_h},setsar=1[base]"
+            elif layout == "blur":
+                bw, bh = out_w // 4, out_h // 4
+                graph = (
+                    f"[0:v]split=2[a][b];"
+                    f"[a]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
+                    f"boxblur=10:2,scale={out_w}:{out_h}[bg];"
+                    f"[b]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease[fg];"
+                    f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[base]"
+                )
             else:
-                filter_complex += "[vout]"
-        elif aspect_ratio == "9:16_crop":
-            vf_filter = "crop=ih*9/16:ih,scale=1080:1920"
-            if sub_file and has_sub_filter:
-                escaped_sub = sub_file.replace("\\", "/").replace(":", "\\:")
-                vf_filter += f",subtitles='{escaped_sub}'"
-        else:  # 16:9
-            if sub_file and has_sub_filter:
-                escaped_sub = sub_file.replace("\\", "/").replace(":", "\\:")
-                vf_filter = f"subtitles='{escaped_sub}'"
+                graph = (
+                    f"[0:v]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
+                    f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2,setsar=1[base]"
+                )
+            cmd = [ffmpeg_bin, "-hide_banner", "-y", "-i", raw]
+            if captions:
+                playlist, band_y = captions
+                cmd += ["-f", "concat", "-safe", "0", "-i", playlist]
+                graph += f";[base][1:v]overlay=0:{band_y}:eof_action=pass:format=auto[vout]"
+            else:
+                graph += ";[base]null[vout]"
+            final = os.path.join(tmpdir, "final.mp4")
+            cmd += [
+                "-filter_complex", graph, "-map", "[vout]", "-map", "0:a?",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
+                "-progress", "pipe:1", "-nostats", final,
+            ]
+            _update(job, status="rendering", progress=60, message="Merender video...")
+            run_ffmpeg(cmd, duration, tmpdir, lambda f: _update(job, progress=60 + round(39 * f)))
+        finally:
+            _render_slot.release()
 
-        ff_cmd = [ffmpeg_bin, "-y", "-i", raw_input]
-        soft_sub = bool(sub_file and not has_sub_filter)
-        if soft_sub and sub_file:
-            ff_cmd.extend(["-i", sub_file])
+        _update(job, status="done", progress=100, output_file=final, notes=notes,
+                message="Selesai!" + (" " + " ".join(notes) if notes else ""))
+    except UserError as e:
+        _update(job, status="error", error=str(e), notes=notes, message=f"Gagal: {e}")
+    except Exception as e:  # keep the helper alive and report something useful
+        sys.stderr.write(f"[helper] export error: {e!r}\n")
+        _update(job, status="error", error=f"Terjadi kesalahan: {e}", notes=notes, message="Gagal.")
 
-        if is_complex:
-            ff_cmd.extend(["-filter_complex", filter_complex, "-map", "[vout]", "-map", "0:a?"])
-        elif vf_filter:
-            ff_cmd.extend(["-vf", vf_filter])
 
-        ff_cmd.extend([
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "22",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-pix_fmt", "yuv420p",
-        ])
+def start_export(params: dict) -> str:
+    url = clean_url(str(params.get("url", "")))
+    if not url or not is_youtube(url):
+        raise UserError("Link YouTube tidak valid.")
+    _purge_old_jobs()
+    job_id = uuid.uuid4().hex
+    job = {
+        "id": job_id,
+        "status": "pending",
+        "progress": 2,
+        "message": "Menyiapkan ekspor...",
+        "created_at": time.time(),
+        "tmpdir": tempfile.mkdtemp(prefix="autoclip_"),
+        "filename": f"{safe_filename(str(params.get('title') or 'klip'))}.mp4",
+        "notes": [],
+    }
+    with _jobs_lock:
+        _export_jobs[job_id] = job
+    threading.Thread(target=_run_export_job, args=(job, params), daemon=True).start()
+    return job_id
 
-        if soft_sub:
-            ff_cmd.extend(["-c:s", "mov_text", "-metadata:s:s:0", "language=ind"])
 
-        ff_cmd.append(final_output)
-
-        ff_res = subprocess.run(ff_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=240)
-        if ff_res.returncode != 0:
-            err_log = (ff_res.stderr or ff_res.stdout or "")[-400:]
-            raise UserError(f"Gagal merender dengan FFmpeg: {err_log}")
-
-        with _jobs_lock:
-            job["status"] = "done"
-            job["progress"] = 100
-            job["message"] = "Selesai!"
-            job["output_file"] = final_output
-
-    except Exception as e:
-        sys.stderr.write(f"[helper export error] {e!r}\n")
-        with _jobs_lock:
-            job["status"] = "error"
-            job["error"] = friendly_error(e)
-            job["message"] = f"Gagal: {job['error']}"
+def ensure_optional_packages():
+    """Install face detection and caption drawing packages into the helper's own venv."""
+    missing = [pkg for mod, pkg in OPTIONAL_PACKAGES if not has_module(mod)]
+    if not missing:
+        return
+    in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+    if not in_venv:
+        print(f"  Untuk deteksi wajah & caption, pasang: pip install {' '.join(missing)}")
+        return
+    print(f"Memasang komponen tambahan (sekali saja): {', '.join(missing)} ...", flush=True)
+    res = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", *missing])
+    importlib.invalidate_caches()
+    if res.returncode != 0:
+        print("  Gagal memasang; ekspor tetap jalan tanpa deteksi wajah/caption.")
 
 
 def health() -> dict:
@@ -545,7 +1123,8 @@ def health() -> dict:
         "version": VERSION,
         "yt_dlp": yt_dlp.version.__version__ if yt_dlp else None,
         "ffmpeg": bool(ff_path),
-        "ffmpeg_subtitles": ffmpeg_has_subtitles(),
+        "face_detect": has_module("cv2"),
+        "captions": has_module("PIL"),
         "js_runtime": next((r for r in ("deno", "node", "bun") if shutil.which(r)), None),
         "app": CFG.app_url,
     }
@@ -686,6 +1265,7 @@ class Handler(BaseHTTPRequestHandler):
                 "message": job.get("message", ""),
                 "filename": job.get("filename", "clip.mp4"),
                 "error": job.get("error"),
+                "notes": job.get("notes", []),
             })
 
         if path == "/export/download":
@@ -728,20 +1308,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/export":
-            url = clean_url(body.get("url", ""))
-            if not url or not is_youtube(url):
-                return self.send_json(400, {"error": "Link YouTube tidak valid."})
-            job_id = str(uuid.uuid4())
-            with _jobs_lock:
-                _export_jobs[job_id] = {
-                    "id": job_id,
-                    "status": "pending",
-                    "progress": 5,
-                    "message": "Menyiapkan pekerjaan ekspor...",
-                    "created_at": time.time(),
-                }
-            threading.Thread(target=_run_export_job, args=(job_id, body), daemon=True).start()
-            return self.send_json(200, {"ok": True, "jobId": job_id})
+            try:
+                return self.send_json(200, {"ok": True, "jobId": start_export(body)})
+            except UserError as e:
+                return self.send_json(400, {"error": str(e)})
 
         return self.send_json(404, {"error": "not found"})
 
@@ -816,9 +1386,14 @@ def main() -> int:
         print(f"Port {args.port} sudah dipakai program lain ({e}). Coba --port yang lain.", file=sys.stderr)
         return 1
 
+    ensure_optional_packages()
+    atexit.register(_cleanup_all_jobs)
+
     h = health()
+    yes = lambda v: "ada" if v else "tidak ada"  # noqa: E731
     print(f"AutoClip helper {VERSION} berjalan di http://127.0.0.1:{args.port}")
-    print(f"  yt-dlp {h['yt_dlp']} | ffmpeg: {'ada' if h['ffmpeg'] else 'tidak ada'} | JS runtime: {h['js_runtime'] or 'tidak ada'}")
+    print(f"  yt-dlp {h['yt_dlp']} | ffmpeg: {yes(h['ffmpeg'])} | JS runtime: {h['js_runtime'] or 'tidak ada'}")
+    print(f"  deteksi wajah: {yes(h['face_detect'])} | caption: {yes(h['captions'])}")
     print("  Situs yang diizinkan:")
     for o in sorted(CFG.allowed_origins):
         print(f"    {o}")

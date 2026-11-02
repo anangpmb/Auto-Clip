@@ -34,7 +34,10 @@ step "Menyiapkan Python + yt-dlp di $DIR/venv (bisa beberapa menit)"
 mkdir -p "$DIR"
 "$PY" -m venv "$DIR/venv"
 "$DIR/venv/bin/python" -m pip install --quiet --upgrade pip
-"$DIR/venv/bin/python" -m pip install --quiet --upgrade "yt-dlp[default,deno]"
+"$DIR/venv/bin/python" -m pip install --quiet --upgrade "yt-dlp[default,deno]" opencv-python-headless pillow
+if ! command -v ffmpeg >/dev/null 2>&1 && [ ! -x /opt/homebrew/bin/ffmpeg ] && [ ! -x /usr/local/bin/ffmpeg ]; then
+  echo "Catatan: FFmpeg belum ada. Untuk ekspor video, pasang dengan:  brew install ffmpeg"
+fi
 
 step "Mengunduh helper dari $APP_URL"
 curl -fsSL -o "$DIR/autoclip_helper.py" "${APP_URL}autoclip_helper.py"

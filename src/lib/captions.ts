@@ -247,26 +247,35 @@ Style: Default,Arial Black,${fontSize},${primaryColor},${secondaryColor},${outli
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
-  for (const cue of cues) {
-    const cueStartStr = formatAssTime(cue.start);
-    const cueEndStr = formatAssTime(cue.end);
+  // Same look as the editor preview and the helper's render: the word being spoken
+  // is coloured (and underlined for "box"); the rest of the line stays white.
+  const activeTag =
+    style === 'neon' ? '{\\c&HEED322&}' : style === 'box' ? '{\\c&H47E0FD&\\u1}' : style === 'viral' ? '{\\c&H15CCFA&}' : '';
+  const line = (start: number, end: number, texts: string[], active: number | null) => {
+    const text = texts.map((t, i) => (i === active && activeTag ? `${activeTag}${t}{\\r}` : t)).join(' ');
+    return `Dialogue: 0,${formatAssTime(start)},${formatAssTime(end)},Default,,0,0,0,,${text}\n`;
+  };
 
-    if (style === 'viral' || style === 'neon') {
-      // For each word in the cue, emit timed karaoke tag {\k<centiseconds>}
-      // Or dialogue events that highlight each word during its speech
-      let lineText = '';
-      for (const w of cue.words) {
-        const durCs = Math.max(5, Math.round((w.end - w.start) * 100));
-        lineText += `{\\k${durCs}}${w.text} `;
-      }
-      ass += `Dialogue: 0,${cueStartStr},${cueEndStr},Default,,0,0,0,,${lineText.trim()}\n`;
-    } else {
-      // Clean regular subtitle text
-      ass += `Dialogue: 0,${cueStartStr},${cueEndStr},Default,,0,0,0,,${cue.text}\n`;
+  for (const cue of cues) {
+    const texts = cue.words.map((w) => assText(w.text));
+    if (!activeTag) {
+      ass += line(cue.start, cue.end, texts, null);
+      continue;
     }
+    if (cue.words[0].start > cue.start + 0.02) ass += line(cue.start, cue.words[0].start, texts, null);
+    cue.words.forEach((w, i) => {
+      const from = Math.max(cue.start, w.start);
+      const to = Math.min(cue.end, i + 1 < cue.words.length ? cue.words[i + 1].start : cue.end);
+      if (to > from) ass += line(from, to, texts, i);
+    });
   }
 
   return ass;
+}
+
+/** Braces and backslashes start ASS override tags, so keep them out of caption text. */
+function assText(text: string): string {
+  return text.replace(/[{}]/g, '').replace(/\\/g, '/');
 }
 
 /**

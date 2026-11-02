@@ -39,7 +39,7 @@
     checking
       ? { cls: 'wait', text: 'Mengecek helper…' }
       : health?.ok
-        ? { cls: 'ok', text: `Helper tersambung${health.yt_dlp ? ` · yt-dlp ${health.yt_dlp}` : ''}` }
+        ? { cls: 'ok', text: 'Helper tersambung', extra: health.yt_dlp ? ` · yt-dlp ${health.yt_dlp}` : '' }
         : health?.error === 'origin_not_allowed'
           ? { cls: 'warn', text: 'Helper menolak situs ini' }
           : { cls: 'bad', text: 'Helper belum berjalan' },
@@ -51,8 +51,12 @@
     <img src="./favicon.svg" alt="" width="26" height="26" />
     <span>AutoClip <b>Web</b></span>
   </button>
-  <span class="status {status.cls}" title={settings.helperUrl}><i></i>{status.text}</span>
-  <button class="ghost" onclick={() => (settingsOpen = true)}>⚙ Pengaturan</button>
+  <span class="status {status.cls}" title={settings.helperUrl}
+    ><i></i>{status.text}{#if status.extra}<span class="status-extra">{status.extra}</span>{/if}</span
+  >
+  <button class="ghost settings-btn" onclick={() => (settingsOpen = true)} aria-label="Pengaturan">
+    <span aria-hidden="true">⚙</span><span class="settings-label">Pengaturan</span>
+  </button>
 </header>
 
 <main>
@@ -122,9 +126,42 @@
   .status.bad i {
     background: var(--bad);
   }
+  .brand,
+  .status,
+  .settings-btn {
+    white-space: nowrap;
+  }
+  .status i {
+    flex: none;
+  }
+  .settings-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 40px;
+  }
   main {
     padding: 18px 20px 60px;
     max-width: 1400px;
     margin: 0 auto;
+  }
+  /* Keep the sticky header to one short row on phones so it covers as little as possible. */
+  @media (max-width: 640px) {
+    .top {
+      gap: 8px;
+      padding: 8px 12px;
+    }
+    .status-extra,
+    .settings-label {
+      display: none;
+    }
+    .settings-btn {
+      min-width: 40px;
+      justify-content: center;
+      padding: 0;
+    }
+    main {
+      padding: 14px 12px 48px;
+    }
   }
 </style>

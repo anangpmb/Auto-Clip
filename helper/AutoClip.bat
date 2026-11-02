@@ -24,5 +24,12 @@ if errorlevel 1 (
   )
 )
 
+rem Deteksi wajah (OpenCV) dan caption (Pillow) untuk ekspor video; opsional.
+python -c "import cv2, PIL" >nul 2>nul
+if errorlevel 1 (
+  echo Memasang komponen deteksi wajah dan caption untuk pertama kali...
+  python -m pip install -U opencv-python-headless pillow
+)
+
 python "%~dp0autoclip_helper.py" --app %APP_URL% --open %*
 if errorlevel 1 pause

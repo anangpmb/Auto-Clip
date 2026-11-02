@@ -344,6 +344,8 @@
 <style>
   .project {
     display: grid;
+    /* Long nowrap titles must ellipsize, not widen the page past the screen. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 14px;
   }
   .bar {
@@ -536,11 +538,31 @@
   }
   @media (max-width: 1000px) {
     .workspace {
-      grid-template-columns: 1fr;
+      /* minmax(0, …): the clip snippets are nowrap and must not stretch the column past the screen. */
+      grid-template-columns: minmax(0, 1fr);
     }
     .list {
       position: static;
       max-height: none;
+    }
+  }
+  @media (max-width: 640px) {
+    .bar {
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .thumb {
+      width: 72px;
+    }
+    .info {
+      flex: 1 1 0;
+    }
+    .track {
+      flex: 1 1 100%;
+    }
+    .track select {
+      max-width: none;
+      width: 100%;
     }
   }
 </style>

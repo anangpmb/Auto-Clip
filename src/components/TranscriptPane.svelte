@@ -45,9 +45,35 @@
   const MENU_W = 240;
   const MENU_H = 215;
 
+  /** How long following stays paused after the user scrolls the transcript themselves. */
+  const FOLLOW_RESUME_MS = 6000;
+
   let box: HTMLDivElement;
   let drag = $state<Edge | null>(null);
   let menu = $state<{ wi: number; x: number; y: number } | null>(null);
+  /** True while the user is reading elsewhere in the transcript during playback. */
+  let followPaused = $state(false);
+  let resumeTimer = 0;
+
+  const reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /**
+   * Scroll only the transcript box, never the page, so `el` ends up at `ratio` of the box height.
+   * (scrollIntoView would also scroll the window and push the video preview out of view.)
+   */
+  function scrollBoxTo(el: Element, ratio: number, smooth: boolean) {
+    const pane = box.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    const top = box.scrollTop + (r.top - pane.top) - ratio * (box.clientHeight - r.height);
+    box.scrollTo({ top: Math.max(0, top), behavior: smooth && !reduceMotion ? 'smooth' : 'auto' });
+  }
+
+  function resumeFollow() {
+    clearTimeout(resumeTimer);
+    followPaused = false;
+    const el = box.querySelector(`[data-wi="${currentWord}"]`);
+    if (el) scrollBoxTo(el, 0.3, true);
+  }
 
   const visUnits = $derived(units.slice(unitIndexOfWord(units, lo), unitIndexOfWord(units, hi) + 1));
   const range = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, k) => a + k);
@@ -126,34 +152,74 @@
     const follow = () => {
       if (menu) placeMenu(menu.wi);
     };
+    // Reading elsewhere during playback pauses following instead of fighting the user.
+    const userScrolled = () => {
+      if (!playing) return;
+      followPaused = true;
+      clearTimeout(resumeTimer);
+      resumeTimer = window.setTimeout(() => (followPaused = false), FOLLOW_RESUME_MS);
+    };
+    const scrollKeys = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+    const keyScroll = (e: KeyboardEvent) => {
+      if (scrollKeys.has(e.key)) userScrolled();
+    };
+    const scrollbarDown = (e: PointerEvent) => {
+      if (e.target === box) userScrolled(); // a press on the box itself is its scrollbar
+    };
     box.addEventListener('pointerdown', down);
+    box.addEventListener('pointerdown', scrollbarDown);
     box.addEventListener('click', click);
     box.addEventListener('scroll', follow);
+    box.addEventListener('wheel', userScrolled, { passive: true });
+    box.addEventListener('touchmove', userScrolled, { passive: true });
+    box.addEventListener('keydown', keyScroll);
     window.addEventListener('keydown', keydown);
     window.addEventListener('scroll', follow);
     window.addEventListener('resize', follow);
     return () => {
       up();
+      clearTimeout(resumeTimer);
       box.removeEventListener('pointerdown', down);
+      box.removeEventListener('pointerdown', scrollbarDown);
       box.removeEventListener('click', click);
       box.removeEventListener('scroll', follow);
+      box.removeEventListener('wheel', userScrolled);
+      box.removeEventListener('touchmove', userScrolled);
+      box.removeEventListener('keydown', keyScroll);
       window.removeEventListener('keydown', keydown);
       window.removeEventListener('scroll', follow);
       window.removeEventListener('resize', follow);
     };
   });
 
-  // Bring the clip start into view whenever another clip is opened.
+  // Bring the clip start into view (inside the box only) whenever another clip is opened.
   $effect(() => {
     void focusKey;
     menu = null;
-    tick().then(() => box?.querySelector('[data-edge="start"]')?.scrollIntoView({ block: 'center' }));
+    tick().then(() => {
+      const start = box?.querySelector('[data-edge="start"]');
+      if (start) scrollBoxTo(start, 0.3, false);
+    });
   });
 
-  // Follow the spoken word while the preview plays.
+  // Playback stopped: the next play starts following again.
   $effect(() => {
-    if (!playing || drag || currentWord < lo || currentWord > hi) return;
-    box.querySelector(`[data-wi="${currentWord}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (!playing) {
+      clearTimeout(resumeTimer);
+      followPaused = false;
+    }
+  });
+
+  // Follow the spoken word while the preview plays. The box only scrolls when the word
+  // leaves a comfortable band, then puts it back in the upper third (lyrics-style).
+  $effect(() => {
+    if (!playing || followPaused || drag || currentWord < lo || currentWord > hi) return;
+    const el = box.querySelector(`[data-wi="${currentWord}"]`);
+    if (!el) return;
+    const pane = box.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    const pos = (r.top - pane.top) / Math.max(1, box.clientHeight);
+    if (pos < 0.12 || pos > 0.7) scrollBoxTo(el, 0.3, true);
   });
 
   async function expand(dir: -1 | 1) {
@@ -190,6 +256,15 @@
 
   <button class="more" onclick={() => expand(1)}>↓ Tampilkan 30 detik sesudahnya</button>
 
+  {#if playing && followPaused}
+    <button class="follow-chip" onclick={resumeFollow}>
+      <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"
+        ><path d="M10 3v12m0 0-5-5m5 5 5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg
+      >
+      Ikuti pemutaran
+    </button>
+  {/if}
+
   {#if menu}
     {@const wi = menu.wi}
     {@const u = units[unitIndexOfWord(units, wi)]}
@@ -217,6 +292,40 @@
   .pane.dragging {
     cursor: grabbing;
     user-select: none;
+  }
+  .follow-chip {
+    position: sticky;
+    bottom: 8px;
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 8px auto 0;
+    padding: 8px 14px;
+    min-height: 36px;
+    border-radius: 999px;
+    border: 1px solid rgba(77, 171, 255, 0.5);
+    background: #1b2a40;
+    color: #cfe6ff;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+    animation: chip-in 180ms ease-out;
+  }
+  .follow-chip:hover {
+    background: #22364f;
+  }
+  @keyframes chip-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .follow-chip {
+      animation: none;
+    }
   }
   .more {
     display: block;
