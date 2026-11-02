@@ -19,6 +19,8 @@ export interface HelperHealth {
 export const EXPORT_HELPER_VERSION = '0.3.0';
 /** Oldest helper that can prepare a preview of the final video. */
 export const PREVIEW_HELPER_VERSION = '0.4.0';
+/** Oldest helper that can preview and export a compilation of several scenes. */
+export const COMPILATION_HELPER_VERSION = '0.5.0';
 
 /** True when version a is older than b (dotted numbers). */
 export function versionBefore(a: string | undefined, b: string): boolean {
@@ -39,16 +41,25 @@ export interface CaptionsResult {
   words: Word[];
 }
 
+/** A stretch of the source video, in seconds. */
+export interface Span {
+  start: number;
+  end: number;
+}
+
 export interface ExportParams {
   url: string;
   videoId?: string;
   title: string;
-  start: number;
-  end: number;
+  /** One clip: its cut points. A compilation sends `segments` instead. */
+  start?: number;
+  end?: number;
+  /** Scenes joined in this order into one video (helper 0.5.0+). */
+  segments?: Span[];
   aspectRatio: '16:9' | '9:16_blur' | '9:16_crop';
   captionStyle: 'viral' | 'box' | 'classic' | 'neon' | 'none';
   captionPosition?: 'bottom' | 'center' | 'top';
-  /** Caption cues with word timings relative to the clip start; the helper draws them. */
+  /** Caption cues timed from the start of the final video; the helper draws them. */
   cues?: CaptionCue[];
   /** Preview of this clip; its face path is reused so the export frames like the preview. */
   previewId?: string;
@@ -169,8 +180,14 @@ export function getExportDownloadUrl(helperUrl: string, jobId: string): string {
   return `${base(helperUrl)}/export/download?jobId=${encodeURIComponent(jobId)}`;
 }
 
-/** Asks the helper for a light copy of the clip to preview; the same clip reuses its copy. */
-export async function startPreview(helperUrl: string, params: { url: string; start: number; end: number }): Promise<string> {
+/**
+ * Asks the helper for a light copy of the clip, or of the scenes joined, to preview.
+ * The same clip reuses its copy, and a compilation reuses the copies of its scenes.
+ */
+export async function startPreview(
+  helperUrl: string,
+  params: { url: string } & (Span | { segments: Span[] }),
+): Promise<string> {
   let res: Response;
   try {
     res = await fetch(`${base(helperUrl)}/preview`, {

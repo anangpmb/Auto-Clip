@@ -1,41 +1,34 @@
 <script lang="ts">
   import CaptionOverlay from './CaptionOverlay.svelte';
-  import type { AspectRatio, CaptionPosition, CaptionStyle } from '../lib/captions';
+  import type { AspectRatio, CaptionCue, CaptionPosition, CaptionStyle } from '../lib/captions';
+  import { sceneIndexAt, sceneStarts } from '../lib/compilation';
   import { checkPreviewStatus, previewVideoUrl, startPreview, type PreviewStatus } from '../lib/helper';
   import { centerCropX, cropXAt, layoutFor } from '../lib/preview';
   import { fmtTime } from '../lib/transcript';
-  import type { Word } from '../lib/types';
 
   interface Props {
     helperUrl: string;
     videoUrl: string;
-    /** Clip bounds in seconds of the source video. */
-    start: number;
-    end: number;
-    words: Word[];
-    w0: number;
-    w1: number;
+    /** What plays, in seconds of the source video: one clip, or a compilation's scenes in order. */
+    scenes: { start: number; end: number; title?: string }[];
+    /** Captions timed from the start of the final video: the same cues the export burns in. */
+    cues: CaptionCue[];
     aspect: AspectRatio;
     captionEnabled: boolean;
     captionStyle: CaptionStyle;
     captionPosition: CaptionPosition;
-    uppercase: boolean;
     /** The helper's id for this preview; the export reuses its face path. */
     previewId?: string;
   }
   let {
     helperUrl,
     videoUrl,
-    start,
-    end,
-    words,
-    w0,
-    w1,
+    scenes,
+    cues,
     aspect,
     captionEnabled,
     captionStyle,
     captionPosition,
-    uppercase,
     previewId = $bindable(''),
   }: Props = $props();
 
@@ -60,7 +53,12 @@
   const vertical = $derived(aspect !== '16:9');
   const layout = $derived(layoutFor(aspect, status?.width, status?.height));
   const crop = $derived(status?.crop ?? null);
-  const total = $derived(mediaDuration || status?.duration || end - start);
+  const starts = $derived(sceneStarts(scenes));
+  const many = $derived(scenes.length > 1);
+  const total = $derived(mediaDuration || status?.duration || starts[starts.length - 1]);
+  const sceneNow = $derived(sceneIndexAt(starts, time));
+  /** Cut points, so only a real change of scenes asks the helper for a new preview. */
+  const sceneKey = $derived(JSON.stringify(scenes.map((s) => [+s.start.toFixed(2), +s.end.toFixed(2)])));
   const reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const note = $derived.by(() => {
@@ -84,10 +82,19 @@
   });
 
   // Ask the helper for a light copy of the clip, then poll until the video and the face path are in.
+  let lastKey = '';
   $effect(() => {
     const base = helperUrl;
-    const params = { url: videoUrl, start, end };
+    const key = sceneKey;
+    const spans = JSON.parse(key) as [number, number][];
+    const params =
+      spans.length === 1
+        ? { url: videoUrl, start: spans[0][0], end: spans[0][1] }
+        : { url: videoUrl, segments: spans.map(([start, end]) => ({ start, end })) };
     void attempt;
+    // Reordering scenes is often a few clicks in a row; ask once they settle.
+    const delay = lastKey && lastKey !== key ? 500 : 0;
+    lastKey = key;
     let stopped = false;
     let timer = 0;
     status = null;
@@ -114,13 +121,18 @@
         fail(e);
       }
     };
-    startPreview(base, params).then((id) => {
-      if (stopped) return;
-      previewId = id;
-      poll(id);
-    }, fail);
+    const ask = window.setTimeout(
+      () =>
+        startPreview(base, params).then((id) => {
+          if (stopped) return;
+          previewId = id;
+          poll(id);
+        }, fail),
+      delay,
+    );
     return () => {
       stopped = true;
+      clearTimeout(ask);
       clearTimeout(timer);
       clearInterval(clock);
     };
@@ -237,16 +249,13 @@
           onerror={() => (error = 'Video pratinjau tidak bisa diputar. Coba siapkan ulang.')}
         ></video>
         <CaptionOverlay
-          {words}
-          {w0}
-          {w1}
-          clipStart={start}
-          clipEnd={end}
-          currentTime={start + time}
+          {cues}
+          clipStart={0}
+          clipEnd={total}
+          currentTime={time}
           enabled={captionEnabled}
           style={captionStyle}
           position={captionPosition}
-          {uppercase}
           exact
           {vertical}
         />
@@ -268,7 +277,7 @@
             <div class="spinner" aria-hidden="true"></div>
             <p>{status?.message || 'Menyiapkan pratinjau…'}</p>
             <div class="bar" class:still={reduceMotion} aria-hidden="true"><i></i></div>
-            <p class="muted">{elapsed} dtk · biasanya 5–20 dtk</p>
+            <p class="muted">{elapsed} dtk · {many ? 'biasanya ±5 dtk per adegan' : 'biasanya 5–20 dtk'}</p>
           {/if}
         </div>
       {/if}
@@ -285,21 +294,35 @@
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor" /></svg>
       {/if}
     </button>
-    <input
-      class="scrub"
-      type="range"
-      min="0"
-      max={total}
-      step="0.01"
-      value={time}
-      oninput={(e) => seek(+e.currentTarget.value)}
-      disabled={!src || !!error}
-      aria-label="Posisi pratinjau"
-    />
+    <div class="scrub-wrap">
+      <input
+        class="scrub"
+        type="range"
+        min="0"
+        max={total}
+        step="0.01"
+        value={time}
+        oninput={(e) => seek(+e.currentTarget.value)}
+        disabled={!src || !!error}
+        aria-label="Posisi pratinjau"
+        aria-valuetext={many ? `${fmtTime(time)}, adegan ${sceneNow + 1} dari ${scenes.length}` : fmtTime(time)}
+      />
+      {#if many}
+        <!-- Where one scene cuts to the next -->
+        <div class="cuts" aria-hidden="true">
+          {#each starts.slice(1, -1) as at, i (i)}
+            <i style:left="{(100 * at) / total}%"></i>
+          {/each}
+        </div>
+      {/if}
+    </div>
     <span class="time">{fmtTime(time)} / {fmtTime(total)}</span>
   </div>
 
   <p class="foot">
+    {#if many}
+      <span class="scene-now">Adegan {sceneNow + 1} dari {scenes.length}{scenes[sceneNow]?.title ? ` · ${scenes[sceneNow].title}` : ''}</span>
+    {/if}
     {#if note}
       <span class="note" class:busy={note.busy}>{note.text}</span>
     {/if}
@@ -457,6 +480,12 @@
     padding: 0;
     border-radius: 50%;
   }
+  .scrub-wrap {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+  }
   .scrub {
     flex: 1;
     min-width: 0;
@@ -464,6 +493,29 @@
     border: 0;
     background: none;
     accent-color: var(--accent);
+  }
+  /* Inset by about half a thumb, where the range track starts and ends. */
+  .cuts {
+    position: absolute;
+    inset: 0 8px;
+    pointer-events: none;
+  }
+  .cuts i {
+    position: absolute;
+    top: 50%;
+    width: 2px;
+    height: 12px;
+    margin: -6px 0 0 -1px;
+    border-radius: 1px;
+    background: var(--text);
+    opacity: 0.7;
+  }
+  .scene-now {
+    color: var(--text);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .time {
     flex: none;

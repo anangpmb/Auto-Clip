@@ -63,6 +63,8 @@ export interface LoadedProject {
   meta: ProjectMeta;
   words: Word[];
   clips: Clip[];
+  /** Ids of the clips joined into the highlight compilation, in play order. */
+  compilation?: string[];
 }
 
 export interface ProjectSummary {

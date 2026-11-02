@@ -20,6 +20,7 @@
   import { fetchCaptions, type HelperHealth } from '../lib/helper';
   import { saveProject, saveWords } from '../lib/storage';
   import { downloadFile, generateSrt } from '../lib/captions';
+  import { inSourceOrder, scenesOf, sceneStarts, SHORTS_SECONDS } from '../lib/compilation';
 
   interface Props {
     initial: LoadedProject;
@@ -37,9 +38,17 @@
   let clips = $state(untrack(() => initial.clips));
   let selectedId = $state<string | null>(untrack(() => initial.clips[0]?.id ?? null));
   let showExportModal = $state(false);
+  /** Clip ids joined into one highlight video, in play order. */
+  let compilation = $state<string[]>(untrack(() => initial.compilation ?? []));
+  let showCompilation = $state(false);
 
   const units = $derived(buildUnits(words));
   const selected = $derived(clips.find((c) => c.id === selectedId) ?? null);
+  const compClips = $derived(compilation.map((id) => clips.find((c) => c.id === id)).filter((c): c is Clip => !!c));
+  const compTotal = $derived.by(() => {
+    const scenes = scenesOf(words, compClips, settings.padStart, settings.padEnd);
+    return sceneStarts(scenes)[scenes.length];
+  });
 
   let playerTime = 0;
   let aiBusy = $state(false);
@@ -53,10 +62,11 @@
   $effect(() => {
     const m = $state.snapshot(meta);
     const c = $state.snapshot(clips);
+    const comp = $state.snapshot(compilation);
     clearTimeout(saveTimer);
     saveTimer = window.setTimeout(() => {
       try {
-        saveProject(m, c);
+        saveProject(m, c, comp);
       } catch (e) {
         flash((e as Error).message);
       }
@@ -78,7 +88,31 @@
   function deleteClip(id: string) {
     const i = clips.findIndex((c) => c.id === id);
     clips = clips.filter((c) => c.id !== id);
+    compilation = compilation.filter((x) => x !== id);
     if (selectedId === id) selectedId = clips[Math.min(i, clips.length - 1)]?.id ?? null;
+  }
+
+  function toggleInCompilation(id: string) {
+    compilation = compilation.includes(id) ? compilation.filter((x) => x !== id) : [...compilation, id];
+  }
+
+  function moveScene(id: string, dir: -1 | 1) {
+    const i = compilation.indexOf(id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= compilation.length) return;
+    const next = [...compilation];
+    [next[i], next[j]] = [next[j], next[i]];
+    compilation = next;
+  }
+
+  function removeScene(id: string) {
+    compilation = compilation.filter((x) => x !== id);
+    if (!compilation.length) showCompilation = false;
+  }
+
+  function editScene(id: string) {
+    showCompilation = false;
+    selectedId = id;
   }
 
   function addManualClip() {
@@ -103,7 +137,10 @@
       onsettings();
       return;
     }
-    if (clips.length && !confirm('Ganti semua klip yang ada dengan hasil AI yang baru?')) return;
+    const ask = compilation.length
+      ? 'Ganti semua klip yang ada dengan hasil AI yang baru? Kompilasi highlight juga dikosongkan.'
+      : 'Ganti semua klip yang ada dengan hasil AI yang baru?';
+    if (clips.length && !confirm(ask)) return;
     aiBusy = true;
     error = '';
     aiStatus = 'Menyiapkan…';
@@ -116,6 +153,7 @@
         onProgress: (m) => (aiStatus = m),
       });
       clips = found;
+      compilation = [];
       selectedId = found[0]?.id ?? null;
       if (!found.length) error = 'AI tidak menemukan klip yang cocok. Coba ubah durasi atau instruksi tambahan di Pengaturan.';
     } catch (e) {
@@ -270,10 +308,34 @@
   {#if clips.length}
     <div class="workspace">
       <aside class="list">
+        <section class="comp" class:filled={compClips.length > 0} aria-labelledby="comp-title">
+          <div class="comp-head">
+            <h2 id="comp-title">🎞️ Kompilasi highlight</h2>
+            {#if compClips.length}
+              <span class="comp-meta" class:over={compTotal > SHORTS_SECONDS}>
+                {compClips.length} adegan · {fmtDuration(compTotal)}
+              </span>
+            {/if}
+          </div>
+          {#if compClips.length}
+            <button class="primary comp-open" onclick={() => (showCompilation = true)}>Atur, Pratinjau & Ekspor</button>
+          {:else}
+            <p class="comp-hint">
+              Gabungkan beberapa klip jadi satu video. Tekan
+              <span class="plus-chip" aria-hidden="true"
+                ><svg viewBox="0 0 16 16" width="10" height="10"
+                  ><path d="M2.5 5.5h8v8h-8zM5.5 2.5h8v8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /></svg
+                >+</span
+              > di klip, sesuai urutan tayangnya.
+            </p>
+          {/if}
+        </section>
+
         {#each clips as c, i (c.id)}
           {@const b = boundsOf(c)}
           {@const st = durationStatus(b.end - b.start, settings.minSec, settings.maxSec)}
           {@const edited = c.aiW0 !== null && (c.w0 !== c.aiW0 || c.w1 !== c.aiW1)}
+          {@const scene = compilation.indexOf(c.id)}
           <div class="item" class:active={c.id === selectedId}>
             <button class="pick" onclick={() => (selectedId = c.id)}>
               <span class="n">{i + 1}</span>
@@ -287,7 +349,22 @@
                 <span class="snip">“{joinWords(words, c.w0, Math.min(c.w1, c.w0 + 9))}…”</span>
               </span>
             </button>
-            <button class="del" onclick={() => deleteClip(c.id)} aria-label="Hapus klip {i + 1}" title="Hapus klip">×</button>
+            <div class="tools">
+              <button class="del" onclick={() => deleteClip(c.id)} aria-label="Hapus klip {i + 1}" title="Hapus klip">×</button>
+              <button
+                class="in-comp"
+                class:on={scene >= 0}
+                onclick={() => toggleInCompilation(c.id)}
+                aria-pressed={scene >= 0}
+                aria-label="Masukkan klip {i + 1} ke kompilasi"
+                title={scene >= 0 ? `Adegan ${scene + 1} di kompilasi. Tekan untuk mengeluarkan.` : 'Masukkan ke kompilasi'}
+              >
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
+                  ><path d="M2.5 5.5h8v8h-8zM5.5 2.5h8v8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" /></svg
+                >
+                {#if scene >= 0}{scene + 1}{:else}+{/if}
+              </button>
+            </div>
           </div>
         {/each}
         <button class="add" onclick={addManualClip}>+ Tambah klip manual</button>
@@ -324,9 +401,28 @@
     </div>
   {/if}
 
+  {#if showCompilation && compClips.length}
+    <ExportModal
+      clips={compClips}
+      compilation
+      {words}
+      videoUrl={meta.video.url}
+      videoId={meta.video.id}
+      videoTitle={meta.video.title}
+      {settings}
+      {helperOk}
+      {helperHealth}
+      onclose={() => (showCompilation = false)}
+      onmove={moveScene}
+      onremove={removeScene}
+      onedit={editScene}
+      onsort={() => (compilation = inSourceOrder(compilation, clips))}
+    />
+  {/if}
+
   {#if showExportModal && selected}
     <ExportModal
-      clip={selected}
+      clips={[selected]}
       {words}
       videoUrl={meta.video.url}
       videoId={meta.video.id}
@@ -486,9 +582,15 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .tools {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 6px;
+  }
   .del {
-    align-self: flex-start;
-    margin: 6px;
     width: 26px;
     height: 26px;
     padding: 0;
@@ -499,6 +601,87 @@
   }
   .del:hover {
     color: var(--bad);
+  }
+  /* Numbered like a photo picker: the number is the scene's place in the compilation.
+     Square and blue, so it never reads as the clip's own (round) number. */
+  .in-comp {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 40px;
+    height: 28px;
+    padding: 0 7px;
+    border-radius: 7px;
+    border: 1.5px dashed var(--border);
+    background: transparent;
+    color: var(--muted);
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .in-comp:hover {
+    border-color: var(--accent-2);
+    color: var(--text);
+  }
+  .in-comp.on {
+    border: 1.5px solid var(--accent-2);
+    background: var(--accent-2);
+    color: #08111d;
+    font-size: 13px;
+  }
+  .in-comp.on:hover {
+    background: #74bdff;
+  }
+  .comp {
+    display: grid;
+    gap: 8px;
+    padding: 12px;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+  }
+  .comp.filled {
+    border-style: solid;
+    border-color: rgba(255, 77, 109, 0.45);
+    background: rgba(255, 77, 109, 0.07);
+  }
+  .comp-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .comp h2 {
+    margin: 0;
+    font-size: 14px;
+  }
+  .comp-meta {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .comp-meta.over {
+    color: var(--warn);
+  }
+  .comp-hint {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .plus-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 5px;
+    border: 1.5px dashed var(--muted);
+    font-weight: 700;
+    font-size: 11px;
+    line-height: 1;
+    vertical-align: -3px;
   }
   .add {
     border-style: dashed;

@@ -88,6 +88,7 @@ Opsi lain:
    - **Kembalikan saran AI** untuk membatalkan perubahan.
 5. Ekspor: **Salin daftar**, **Salin perintah yt-dlp** (mengunduh potongan mentah), atau
    **Unduh JSON**.
+6. Mau satu video highlight dari beberapa momen? Lihat **Kompilasi highlight** di bawah.
 
 Proyek tersimpan otomatis di browser (localStorage).
 
@@ -121,6 +122,29 @@ Saat **Mulai Render Video**, helper:
 Kebutuhan: FFmpeg (`brew install ffmpeg` / `winget install ffmpeg`), plus paket Python
 `opencv-python-headless` dan `pillow`. Launcher Mac/Windows memasangnya otomatis. Model
 wajah (~230 KB) diunduh sekali ke `~/.autoclip/models` dan dicek hash-nya.
+
+## Kompilasi highlight
+
+Gabungkan beberapa momen dari satu video jadi satu video highlight:
+
+1. Di daftar klip, tekan tombol kompilasi (ikon tumpukan dengan **+**) pada klip yang mau
+   dimasukkan. Nomor di tombol itu adalah urutan tayangnya di kompilasi.
+2. Rapikan awal/akhir tiap klip seperti biasa di editor. Untuk kompilasi, potongan pendek
+   (5–20 detik) biasanya paling enak ditonton; turunkan durasi min/maks di **Pengaturan**
+   kalau mau AI mencari momen yang lebih pendek.
+3. Klik **Atur, Pratinjau & Ekspor** di kartu **Kompilasi highlight**. Di sana kamu bisa
+   mengubah urutan adegan (↑ ↓, atau **Urutkan sesuai waktu video**), mengeluarkan adegan,
+   atau kembali ke editor untuk merapikan potongannya (✎).
+4. Pratinjau memutar semua adegan berurutan, dengan format, kamera ikuti wajah, dan caption
+   yang sama dengan hasil ekspor. Tanda di garis waktu menunjukkan pergantian adegan.
+5. **Mulai Render Kompilasi** menghasilkan satu MP4. Antar adegan dipotong langsung (hard
+   cut) dengan suara yang dihaluskan beberapa milidetik supaya tidak berbunyi klik. Caption
+   tidak pernah menyeberang ke adegan berikutnya, dan kamera langsung pindah di tiap potongan.
+
+Pratinjau tiap adegan disimpan sementara oleh helper, jadi mengubah urutan hanya perlu
+menggabungkan ulang (beberapa detik), dan adegan yang sudah dipratinjau sendiri tidak
+diunduh lagi. Total kompilasi maksimal 10 menit (Shorts dan Reels maks. 3 menit). File
+.SRT/.VTT/.ASS juga mengikuti urutan adegan. Butuh helper 0.5.0 atau lebih baru.
 
 ## Pengembangan
 

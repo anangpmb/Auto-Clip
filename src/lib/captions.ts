@@ -147,7 +147,11 @@ export function groupWordsIntoCues(
  * Generates SubRip (.srt) subtitle string for a clip.
  */
 export function generateSrt(words: Word[], clipStart: number, clipEnd: number, options: CaptionOptions = {}): string {
-  const cues = groupWordsIntoCues(words, clipStart, clipEnd, options);
+  return cuesToSrt(groupWordsIntoCues(words, clipStart, clipEnd, options));
+}
+
+/** SubRip (.srt) text for cues that are already timed, e.g. a compilation's. */
+export function cuesToSrt(cues: CaptionCue[]): string {
   if (!cues.length) return '';
 
   return cues
@@ -162,7 +166,11 @@ export function generateSrt(words: Word[], clipStart: number, clipEnd: number, o
  * Generates WebVTT (.vtt) subtitle string for a clip.
  */
 export function generateVtt(words: Word[], clipStart: number, clipEnd: number, options: CaptionOptions = {}): string {
-  const cues = groupWordsIntoCues(words, clipStart, clipEnd, options);
+  return cuesToVtt(groupWordsIntoCues(words, clipStart, clipEnd, options));
+}
+
+/** WebVTT (.vtt) text for cues that are already timed. */
+export function cuesToVtt(cues: CaptionCue[]): string {
   let vtt = 'WEBVTT\n\n';
   if (!cues.length) return vtt;
 
@@ -181,11 +189,21 @@ export function generateVtt(words: Word[], clipStart: number, clipEnd: number, o
  * ASS allows stylized viral captions (karaoke highlight, custom fonts, borders, positioning).
  */
 export function generateAss(words: Word[], clipStart: number, clipEnd: number, options: AssOptions = {}): string {
+  const maxWordsPerCue = assWordsPerCue(options.aspectRatio ?? '16:9');
+  return cuesToAss(groupWordsIntoCues(words, clipStart, clipEnd, { uppercase: options.uppercase ?? true, maxWordsPerCue }), options);
+}
+
+/** Words per line in .ass files: vertical video has room for fewer. */
+export function assWordsPerCue(aspectRatio: AspectRatio): number {
+  return aspectRatio.startsWith('9:16') ? 4 : 6;
+}
+
+/** .ass text for cues that are already timed (group them with assWordsPerCue words). */
+export function cuesToAss(cues: CaptionCue[], options: AssOptions = {}): string {
   const {
     style = 'viral',
     position = 'bottom',
     aspectRatio = '16:9',
-    uppercase = true,
     title = 'AutoClip Subtitle',
   } = options;
 
@@ -227,8 +245,6 @@ export function generateAss(words: Word[], clipStart: number, clipEnd: number, o
     outlineSize = isVertical ? 4 : 3;
     secondaryColor = '&H00FFFFFF';
   }
-
-  const cues = groupWordsIntoCues(words, clipStart, clipEnd, { uppercase, maxWordsPerCue: isVertical ? 4 : 6 });
 
   let ass = `[Script Info]
 Title: ${title}

@@ -2,17 +2,12 @@
   import { onDestroy } from 'svelte';
   import FinalPreview from './FinalPreview.svelte';
   import type { Clip, Settings, Word } from '../lib/types';
-  import {
-    buildExportCommand,
-    downloadFile,
-    generateAss,
-    generateSrt,
-    generateVtt,
-    groupWordsIntoCues,
-  } from '../lib/captions';
-  import { clipBounds, fmtDuration, fmtTime } from '../lib/transcript';
+  import { assWordsPerCue, buildExportCommand, cuesToAss, cuesToSrt, cuesToVtt, downloadFile } from '../lib/captions';
+  import { MAX_FINAL_SECONDS, scenesOf, sceneStarts, SHORTS_SECONDS, timelineCues } from '../lib/compilation';
+  import { fmtDuration, fmtTime } from '../lib/transcript';
   import {
     checkExportStatus,
+    COMPILATION_HELPER_VERSION,
     EXPORT_HELPER_VERSION,
     getExportDownloadUrl,
     PREVIEW_HELPER_VERSION,
@@ -23,7 +18,10 @@
   import { copyText } from '../lib/clipboard';
 
   interface Props {
-    clip: Clip;
+    /** What goes into the video, in play order: one clip, or the scenes of a compilation. */
+    clips: Clip[];
+    /** Shows the scene list (order, edit, remove) and names the file as a compilation. */
+    compilation?: boolean;
     words: Word[];
     videoUrl: string;
     videoId: string;
@@ -32,10 +30,16 @@
     helperOk: boolean;
     helperHealth: HelperHealth | null;
     onclose: () => void;
+    onmove?: (id: string, dir: -1 | 1) => void;
+    onremove?: (id: string) => void;
+    /** Go back to the editor to trim this scene. */
+    onedit?: (id: string) => void;
+    onsort?: () => void;
   }
 
   let {
-    clip,
+    clips,
+    compilation = false,
     words,
     videoUrl,
     videoId,
@@ -44,11 +48,18 @@
     helperOk,
     helperHealth,
     onclose,
+    onmove,
+    onremove,
+    onedit,
+    onsort,
   }: Props = $props();
 
-  const bounds = $derived(clipBounds(words, clip.w0, clip.w1, settings.padStart, settings.padEnd));
-  const duration = $derived(bounds.end - bounds.start);
-  const clipWords = $derived(words.slice(clip.w0, clip.w1 + 1));
+  const scenes = $derived(scenesOf(words, clips, settings.padStart, settings.padEnd));
+  const many = $derived(scenes.length > 1);
+  const duration = $derived(sceneStarts(scenes)[scenes.length]);
+  const tooLong = $derived(duration > MAX_FINAL_SECONDS);
+  const inSourceOrder = $derived(scenes.every((s, i) => i === 0 || scenes[i - 1].start <= s.start));
+  const title = $derived(compilation ? `Highlight - ${videoTitle}` : clips[0]?.title || videoTitle);
 
   // The choices here are the saved settings, so the preview, the editor and the next export agree.
   const aspectRatio = $derived(settings.aspectRatio);
@@ -60,14 +71,18 @@
 
   /** Set by the preview; the export reuses its face path so both frame the subject alike. */
   let previewId = $state('');
+  const previewVersion = $derived(many ? COMPILATION_HELPER_VERSION : PREVIEW_HELPER_VERSION);
+  const tooLongText = 'Total kompilasi lebih dari 10 menit. Keluarkan atau pendekkan beberapa adegan.';
   const previewBlocked = $derived(
-    !helperOk
-      ? `Pratinjau hasil akhir butuh helper yang berjalan di ${settings.helperUrl}.`
-      : versionBefore(helperHealth?.version, PREVIEW_HELPER_VERSION)
-        ? `Pratinjau butuh helper versi ${PREVIEW_HELPER_VERSION} atau lebih baru (sekarang ${helperHealth?.version ?? 'lama'}). Tutup helper, lalu buka lagi lewat launcher AutoClip.`
-        : !helperHealth?.ffmpeg
-          ? 'Pratinjau butuh FFmpeg di komputer ini (Mac: brew install ffmpeg, Windows: winget install ffmpeg).'
-          : '',
+    tooLong
+      ? tooLongText
+      : !helperOk
+        ? `Pratinjau hasil akhir butuh helper yang berjalan di ${settings.helperUrl}.`
+        : versionBefore(helperHealth?.version, previewVersion)
+          ? `${many ? 'Kompilasi' : 'Pratinjau'} butuh helper versi ${previewVersion} atau lebih baru (sekarang ${helperHealth?.version ?? 'lama'}). Tutup helper, lalu buka lagi lewat launcher AutoClip.`
+          : !helperHealth?.ffmpeg
+            ? 'Pratinjau butuh FFmpeg di komputer ini (Mac: brew install ffmpeg, Windows: winget install ffmpeg).'
+            : '',
   );
 
   // Export job state
@@ -80,8 +95,9 @@
   let pollTimer: number | null = null;
   let copiedCmd = $state(false);
 
-  // Older helpers ignore `cues` (no captions) and cannot follow faces.
-  const helperOutdated = $derived(!!helperHealth?.ok && versionBefore(helperHealth.version, EXPORT_HELPER_VERSION));
+  // Older helpers ignore `cues` (no captions) and cannot follow faces or join scenes.
+  const exportVersion = $derived(many ? COMPILATION_HELPER_VERSION : EXPORT_HELPER_VERSION);
+  const helperOutdated = $derived(!!helperHealth?.ok && versionBefore(helperHealth.version, exportVersion));
   const warnings = $derived.by(() => {
     const out: string[] = [];
     if (!helperHealth?.ok || helperOutdated) return out;
@@ -93,39 +109,38 @@
     return out;
   });
 
-  // Same grouping as the editor preview (CaptionOverlay), so the video matches what you saw.
-  const cues = $derived(captionEnabled ? groupWordsIntoCues(clipWords, bounds.start, bounds.end, { uppercase }) : []);
+  // Same grouping as the editor preview (CaptionOverlay), timed on the final video; the
+  // preview shows exactly these cues and the export burns them in.
+  const cues = $derived(captionEnabled ? timelineCues(words, scenes, { uppercase }) : []);
 
   onDestroy(() => {
     if (pollTimer) clearInterval(pollTimer);
   });
 
   const safeTitle = $derived(
-    clip.title.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_') || 'klip'
+    title.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_') || 'klip'
   );
 
   const assContent = $derived(
     captionEnabled
-      ? generateAss(clipWords, bounds.start, bounds.end, {
+      ? cuesToAss(timelineCues(words, scenes, { uppercase, maxWordsPerCue: assWordsPerCue(aspectRatio) }), {
           style: captionStyle,
           position: captionPosition,
           aspectRatio,
-          uppercase,
-          title: clip.title,
+          title,
         })
       : ''
   );
 
-  const srtContent = $derived(
-    generateSrt(clipWords, bounds.start, bounds.end, { uppercase })
-  );
-
+  // The manual command cuts one stretch, so it is only offered for a single clip.
   const exportCmd = $derived(
-    buildExportCommand(sourceUrl, bounds.start, bounds.end, clip.title, {
-      aspectRatio,
-      burnCaptions: captionEnabled,
-      srtFilename: `${safeTitle}.srt`,
-    })
+    scenes.length === 1
+      ? buildExportCommand(sourceUrl, scenes[0].start, scenes[0].end, title, {
+          aspectRatio,
+          burnCaptions: captionEnabled,
+          srtFilename: `${safeTitle}.srt`,
+        })
+      : ''
   );
 
   function stopExport() {
@@ -143,12 +158,12 @@
     downloadReadyUrl = '';
 
     try {
+      const spans = scenes.map(({ start, end }) => ({ start, end }));
       const { jobId } = await startExport(settings.helperUrl, {
         url: sourceUrl,
         videoId,
-        title: clip.title,
-        start: bounds.start,
-        end: bounds.end,
+        title,
+        ...(many ? { segments: spans } : spans[0]),
         aspectRatio,
         captionStyle: captionEnabled ? captionStyle : 'none',
         captionPosition,
@@ -194,12 +209,11 @@
   }
 
   function handleDownloadSrt() {
-    downloadFile(`${safeTitle}.srt`, srtContent, 'text/plain;charset=utf-8');
+    downloadFile(`${safeTitle}.srt`, cuesToSrt(timelineCues(words, scenes, { uppercase })), 'text/plain;charset=utf-8');
   }
 
   function handleDownloadVtt() {
-    const vtt = generateVtt(clipWords, bounds.start, bounds.end, { uppercase });
-    downloadFile(`${safeTitle}.vtt`, vtt, 'text/vtt;charset=utf-8');
+    downloadFile(`${safeTitle}.vtt`, cuesToVtt(timelineCues(words, scenes, { uppercase })), 'text/vtt;charset=utf-8');
   }
 
   function handleDownloadAss() {
@@ -231,9 +245,13 @@
   <div class="modal" onclick={(e) => e.stopPropagation()} role="document">
     <div class="modal-head">
       <div>
-        <h2 id="modal-title">🎬 Pratinjau & Ekspor</h2>
+        <h2 id="modal-title">{compilation ? '🎞️ Kompilasi Highlight' : '🎬 Pratinjau & Ekspor'}</h2>
         <p class="subtitle">
-          <b>{clip.title}</b> · {fmtTime(bounds.start, true)} → {fmtTime(bounds.end, true)} ({fmtDuration(duration)})
+          {#if compilation}
+            <b>{scenes.length} adegan</b> dijadikan satu video · total {fmtDuration(duration)}
+          {:else}
+            <b>{title}</b> · {fmtTime(scenes[0].start, true)} → {fmtTime(scenes[0].end, true)} ({fmtDuration(duration)})
+          {/if}
         </p>
       </div>
       <button class="ghost close" onclick={onclose} aria-label="Tutup">✕</button>
@@ -251,22 +269,80 @@
           <FinalPreview
             helperUrl={settings.helperUrl}
             videoUrl={sourceUrl}
-            start={bounds.start}
-            end={bounds.end}
-            {words}
-            w0={clip.w0}
-            w1={clip.w1}
+            {scenes}
+            {cues}
             aspect={aspectRatio}
             {captionEnabled}
             {captionStyle}
             {captionPosition}
-            {uppercase}
             bind:previewId
           />
         {/if}
       </section>
 
       <div class="settings-col">
+        {#if compilation}
+          <!-- The scenes, in the order they play -->
+          <div class="form-group">
+            <div class="scenes-head">
+              <span class="group-title">Urutan adegan</span>
+              <button type="button" class="ghost small" onclick={() => onsort?.()} disabled={inSourceOrder}>
+                Urutkan sesuai waktu video
+              </button>
+            </div>
+            <ol class="scenes">
+              {#each scenes as s, i (s.id)}
+                <li class="scene">
+                  <span class="scene-n" aria-hidden="true">{i + 1}</span>
+                  <span class="scene-body">
+                    <span class="scene-title">{s.title}</span>
+                    <span class="scene-sub">{fmtTime(s.start)}–{fmtTime(s.end)} · {fmtDuration(s.end - s.start)}</span>
+                  </span>
+                  <span class="scene-tools">
+                    <button
+                      type="button"
+                      class="icon"
+                      onclick={() => onmove?.(s.id, -1)}
+                      disabled={i === 0}
+                      aria-label="Naikkan adegan {i + 1}"
+                      title="Naikkan">↑</button
+                    >
+                    <button
+                      type="button"
+                      class="icon"
+                      onclick={() => onmove?.(s.id, 1)}
+                      disabled={i === scenes.length - 1}
+                      aria-label="Turunkan adegan {i + 1}"
+                      title="Turunkan">↓</button
+                    >
+                    <button
+                      type="button"
+                      class="icon"
+                      onclick={() => onedit?.(s.id)}
+                      aria-label="Ubah potongan adegan {i + 1} di editor"
+                      title="Ubah potongan di editor">✎</button
+                    >
+                    <button
+                      type="button"
+                      class="icon remove"
+                      onclick={() => onremove?.(s.id)}
+                      aria-label="Keluarkan adegan {i + 1} dari kompilasi"
+                      title="Keluarkan dari kompilasi">×</button
+                    >
+                  </span>
+                </li>
+              {/each}
+            </ol>
+            <p class="desc" class:warn-text={duration > SHORTS_SECONDS}>
+              Total {fmtDuration(duration)}{tooLong
+                ? ': lebih dari batas 10 menit.'
+                : duration > SHORTS_SECONDS
+                  ? ': lebih dari 3 menit, batas Shorts dan Reels.'
+                  : '.'} Untuk merapikan awal/akhir sebuah adegan, tekan ✎.
+            </p>
+          </div>
+        {/if}
+
         <!-- Section 1: Aspect Ratio -->
         <div class="form-group">
           <span class="group-title">Rasio Aspek Video</span>
@@ -376,7 +452,9 @@
         <div class="export-box">
           <div class="export-box-head">
             <h3>⚡ Render & Unduh Video MP4</h3>
-            <p>Hasilnya sama dengan pratinjau, dalam kualitas penuh (maks. 1080p).</p>
+            <p>
+              {many ? 'Semua adegan digabung jadi satu video, sama' : 'Hasilnya sama'} dengan pratinjau, dalam kualitas penuh (maks. 1080p).
+            </p>
           </div>
 
           {#if isExporting}
@@ -395,15 +473,17 @@
               <a href={downloadReadyUrl} class="button primary" download="{safeTitle}.mp4">Unduh Lagi (MP4)</a>
             </div>
           {:else}
-            {#if helperOk && helperOutdated}
+            {#if tooLong}
+              <div class="warn-box">⚠️ {tooLongText}</div>
+            {:else if helperOk && helperOutdated}
               <div class="warn-box">
-                ⚠️ Helper kamu versi {helperHealth?.version ?? 'lama'}; ekspor butuh versi {EXPORT_HELPER_VERSION} atau lebih baru.
+                ⚠️ Helper kamu versi {helperHealth?.version ?? 'lama'}; {many ? 'kompilasi' : 'ekspor'} butuh versi {exportVersion} atau lebih baru.
                 Tutup helper, lalu buka lagi lewat launcher AutoClip (Mac: otomatis mengambil versi terbaru). Di Windows, unduh
                 <a href="./autoclip_helper.py" download>autoclip_helper.py</a> terbaru ke folder helper.
               </div>
             {:else if helperOk}
               <button class="primary large-btn" onclick={handleStartExport} disabled={!helperHealth?.ffmpeg}>
-                🚀 Mulai Render Video ({aspectRatio.startsWith('9:16') ? '9:16' : '16:9'})
+                🚀 Mulai Render {many ? 'Kompilasi' : 'Video'} ({aspectRatio.startsWith('9:16') ? '9:16' : '16:9'})
               </button>
               {#each warnings as w (w)}
                 <div class="note-box">ℹ️ {w}</div>
@@ -426,7 +506,10 @@
         <!-- Section 4: Subtitle Files Download -->
         <div class="form-group">
           <span class="group-title">Unduh File Caption Terpisah</span>
-          <p class="desc">Ekspor transkrip klip ini sebagai file subtitle untuk CapCut, Premiere Pro, atau DaVinci Resolve.</p>
+          <p class="desc">
+            Ekspor transkrip {many ? 'kompilasi ini (sudah mengikuti urutan adegan)' : 'klip ini'} sebagai file subtitle untuk CapCut,
+            Premiere Pro, atau DaVinci Resolve.
+          </p>
           <div class="button-row">
             <button type="button" onclick={handleDownloadSrt}>💾 Unduh .SRT</button>
             <button type="button" onclick={handleDownloadVtt}>💾 Unduh .VTT</button>
@@ -435,6 +518,7 @@
         </div>
 
         <!-- Section 5: Manual Terminal Command -->
+        {#if exportCmd}
         <details class="form-group manual">
           <summary class="group-title">Perintah Terminal (yt-dlp + FFmpeg)</summary>
           <div class="cmd-head">
@@ -448,6 +532,7 @@
           </div>
           <pre class="cmd-block"><code>{exportCmd}</code></pre>
         </details>
+        {/if}
       </div>
     </div>
 
@@ -552,6 +637,92 @@
 
   .manual summary {
     cursor: pointer;
+  }
+
+  /* Compilation scenes */
+  .scenes-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .scenes {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .scene {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 8px 8px 10px;
+    background: var(--panel-2, #212631);
+    border: 1px solid var(--border, #2d3340);
+    border-radius: var(--radius, 8px);
+  }
+
+  .scene-n {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--accent, #6366f1);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .scene-body {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .scene-title {
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .scene-sub {
+    font-size: 12px;
+    color: var(--muted, #94a3b8);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .scene-tools {
+    flex: none;
+    display: flex;
+    gap: 4px;
+  }
+
+  .icon {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    font-size: 15px;
+    line-height: 1;
+  }
+
+  .icon.remove:hover:not(:disabled) {
+    color: var(--bad, #f87171);
+    border-color: var(--bad, #f87171);
+  }
+
+  .warn-text {
+    color: var(--warn, #facc15);
   }
 
   .manual[open] summary {

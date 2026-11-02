@@ -321,7 +321,7 @@
 
   {#if showExportModal}
     <ExportModal
-      {clip}
+      clips={[clip]}
       {words}
       videoUrl={videoUrl || `https://www.youtube.com/watch?v=${videoId}`}
       {videoId}

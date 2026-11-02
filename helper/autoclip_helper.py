@@ -34,11 +34,12 @@ import urllib.request
 import uuid
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
+from fractions import Fraction
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 DEFAULT_PORT = 8765
 DEV_ORIGINS = {
     "http://localhost:5173",
@@ -393,16 +394,23 @@ OPTIONAL_PACKAGES = (("cv2", "opencv-python-headless"), ("PIL", "pillow"))
 ASPECTS = ("16:9", "9:16_blur", "9:16_crop")
 CAPTION_STYLES = ("viral", "box", "classic", "neon", "none")
 POSITIONS = ("bottom", "center", "top")
-MAX_CLIP_SECONDS = 10 * 60
+MAX_CLIP_SECONDS = 10 * 60  # also the limit for a whole compilation
+MAX_SEGMENTS = 30  # scenes in one compilation
 JOB_TTL = 2 * 60 * 60  # finished exports stay downloadable this long
 SAMPLE_STEP = 0.25  # seconds between frames checked for faces
 PREVIEW_HEIGHT = 480
+# Previews are only played in the browser: small, quick, and in a format every browser decodes.
+PREVIEW_ENCODE = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p",
+                  "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]
 MAX_PREVIEWS = 6  # previews kept on disk; older ones are dropped
 
-_export_jobs: dict[str, dict] = {}  # exports and previews, told apart by "kind"
+# Exports and previews, told apart by "kind". A compilation preview lists the ids of its
+# scenes' own previews in "parts", so the scenes are fetched once and shared.
+_export_jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 _render_slot = threading.Semaphore(1)  # one export at a time keeps the computer usable
-_preview_slot = threading.Semaphore(1)
+_preview_slot = threading.Semaphore(1)  # preview downloads, one after another
+_face_slot = threading.Semaphore(1)  # face detection for previews runs beside the downloads
 
 
 def get_ffmpeg_path() -> str | None:
@@ -432,17 +440,22 @@ def _update(job: dict, **fields):
 
 
 def _purge_old_jobs():
-    """Drop finished jobs unused for JOB_TTL, and previews beyond the newest MAX_PREVIEWS."""
+    """Drop finished jobs unused for JOB_TTL, and previews beyond the newest MAX_PREVIEWS.
+
+    Scene previews that a kept compilation is built from stay, whatever their count.
+    """
     now = time.time()
     with _jobs_lock:
         idle = {
             jid: now - j.get("touched", j.get("created_at", now))
             for jid, j in _export_jobs.items()
-            if j.get("status") in ("done", "error", "ready") and j.get("crop_state") != "running"
+            if j.get("status") in ("done", "error", "ready") and j.get("crop_state") not in ("pending", "running")
         }
         old = {jid for jid, age in idle.items() if age > JOB_TTL}
+        in_use = {p for jid, j in _export_jobs.items() if jid not in old for p in j.get("parts", ())}
+        old -= in_use
         previews = sorted(
-            (jid for jid in idle if _export_jobs[jid].get("kind") == "preview" and jid not in old),
+            (jid for jid in idle if _export_jobs[jid].get("kind") == "preview" and jid not in old and jid not in in_use),
             key=lambda jid: idle[jid],
         )
         old.update(previews[MAX_PREVIEWS:])
@@ -458,17 +471,25 @@ def _cleanup_all_jobs():
             shutil.rmtree(job["tmpdir"], ignore_errors=True)
 
 
-def probe_video(ffmpeg_bin: str, path: str) -> tuple[int, int, float]:
-    """Width, height and duration, read from ffmpeg's own banner (no ffprobe needed)."""
+def probe_media(ffmpeg_bin: str, path: str) -> dict:
+    """Size, duration, frame rate (0 when unknown) and whether there is sound, read from
+    ffmpeg's own banner (no ffprobe needed)."""
     res = subprocess.run(
         [ffmpeg_bin, "-hide_banner", "-i", path], capture_output=True, text=True, errors="replace", timeout=60
     )
     size = re.search(r"Video:.*?\b(\d{2,5})x(\d{2,5})\b", res.stderr)
     dur = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", res.stderr)
+    fps = re.search(r"Video:.*?(\d+(?:\.\d+)?) fps", res.stderr)
     if not size:
         raise UserError("Video hasil unduhan tidak bisa dibaca.")
     duration = int(dur.group(1)) * 3600 + int(dur.group(2)) * 60 + float(dur.group(3)) if dur else 0.0
-    return int(size.group(1)), int(size.group(2)), duration
+    return {
+        "width": int(size.group(1)),
+        "height": int(size.group(2)),
+        "duration": duration,
+        "fps": float(fps.group(1)) if fps else 0.0,
+        "audio": bool(re.search(r"Stream #\S+.*?: Audio:", res.stderr)),
+    }
 
 
 # yt-dlp cuts a section by letting ffmpeg stream the format from the cut point, and YouTube
@@ -616,9 +637,7 @@ def download_section(
     url: str, start: float, end: float, tmpdir: str, ffmpeg_bin: str, height: int = 1080, preview: bool = False
 ) -> str:
     if preview:
-        # Only played in the browser: small, quick, and in a format every browser decodes.
-        encode = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p",
-                  "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]
+        encode = PREVIEW_ENCODE
     else:
         # Exact cut points need a re-encode; keep it fast and near-lossless.
         encode = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "17", "-c:a", "aac", "-b:a", "192k"]
@@ -1138,6 +1157,125 @@ def render_caption_track(cues: list[dict], style: str, position: str, out_w: int
     return playlist, band_y
 
 
+# -- compilations ----------------------------------------------------------
+#
+# A compilation joins several scenes of one video into a single clip. The web app lays
+# captions and the face path on a timeline where scene i starts at the summed lengths of
+# the scenes before it, so every join below lands within half a frame of those sums.
+
+def parse_segments(params: dict) -> list[tuple[float, float]]:
+    """The scenes to cut, in play order: `segments` for a compilation, else start/end."""
+    raw = params.get("segments")
+    if raw is None:
+        raw = [{"start": params.get("start", 0), "end": params.get("end", 0)}]
+    if not isinstance(raw, list) or not raw:
+        raise UserError("Daftar adegan kosong.")
+    if len(raw) > MAX_SEGMENTS:
+        raise UserError(f"Kompilasi maksimal {MAX_SEGMENTS} adegan.")
+    segs = []
+    try:
+        for s in raw:
+            start, end = max(0.0, float(s.get("start", 0))), float(s.get("end", 0))
+            if not (math.isfinite(start) and math.isfinite(end)):
+                raise ValueError
+            segs.append((start, end))
+    except (TypeError, ValueError, AttributeError) as e:
+        raise UserError("Waktu klip tidak valid.") from e
+    if any(e - s < 0.5 for s, e in segs):
+        raise UserError("Klip terlalu pendek." if len(segs) == 1 else "Ada adegan yang terlalu pendek (kurang dari 0,5 detik).")
+    if sum(e - s for s, e in segs) > MAX_CLIP_SECONDS:
+        raise UserError("Klip lebih dari 10 menit. Pendekkan dulu." if len(segs) == 1
+                        else "Total kompilasi lebih dari 10 menit. Keluarkan atau pendekkan beberapa adegan.")
+    return segs
+
+
+def frame_rate(fps: float) -> str:
+    """ffmpeg rate for a probed fps; NTSC rates print rounded (29.97) but are exact fractions."""
+    if fps <= 0:
+        return "30"
+    for n in (24, 30, 48, 60, 120):
+        if abs(fps - n * 1000 / 1001) < 0.01:
+            return f"{n * 1000}/1001"
+    return f"{round(fps, 3):g}"
+
+
+def segment_frames(durations: list[float], rate: str) -> list[int]:
+    """Whole frames per scene, rounded on the running total so the error never adds up."""
+    fps = Fraction(rate)
+    frames, done, total = [], 0, 0.0
+    for d in durations:
+        total += d
+        k = max(1, round(total * fps) - done)
+        frames.append(k)
+        done += k
+    return frames
+
+
+def layout_graph(src: str, out: str, layout: str, ih: int, crop_w: int, crop_expr: str | None,
+                 out_w: int, out_h: int, tag: str = "") -> str:
+    """Filters that place one video in the output frame the way the chosen format does."""
+    if layout == "crop":
+        return f"{src}crop=w={crop_w}:h={ih}:x='{crop_expr}':y=0,scale={out_w}:{out_h},setsar=1{out}"
+    if layout == "blur":
+        bw, bh = out_w // 4, out_h // 4
+        return (
+            f"{src}split=2[a{tag}][b{tag}];"
+            f"[a{tag}]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
+            f"boxblur=10:2,scale={out_w}:{out_h}[bg{tag}];"
+            f"[b{tag}]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease[fg{tag}];"
+            f"[bg{tag}][fg{tag}]overlay=(W-w)/2:(H-h)/2,setsar=1{out}"
+        )
+    if layout == "fit":
+        return (
+            f"{src}scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
+            f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2,setsar=1{out}"
+        )
+    return f"{src}scale={out_w}:{out_h},setsar=1{out}"  # "same": the scenes as they are
+
+
+def join_graph(scenes: list[str], audio: list[bool], durations: list[float], rate: str) -> str:
+    """Plays scene graphs one after another into [base] and [aout].
+
+    scenes[i] turns [s{i}] (input i, its clock starting at 0) into [l{i}]. Each scene gets a
+    whole number of frames (segment_frames) and exactly as much sound, faded over a few
+    milliseconds at both ends so the joins do not click.
+    """
+    fps = Fraction(rate)
+    parts, pads = [], []
+    for i, (graph, has_audio, k) in enumerate(zip(scenes, audio, segment_frames(durations, rate))):
+        d = float(k / fps)
+        parts.append(f"[{i}:v]setpts=PTS-STARTPTS[s{i}]")
+        parts.append(graph)
+        # tpad covers a scene that came out a frame or two short; trim then cuts it exactly.
+        parts.append(f"[l{i}]fps={rate},tpad=stop_mode=clone:stop_duration=1,trim=end_frame={k},"
+                     f"setpts=N/FRAME_RATE/TB[v{i}]")
+        sound = f"[{i}:a]asetpts=PTS-STARTPTS," if has_audio else "anullsrc=r=48000:cl=stereo,"
+        parts.append(f"{sound}aformat=sample_rates=48000:channel_layouts=stereo,apad,atrim=end={d:.6f},"
+                     f"asetpts=PTS-STARTPTS,afade=t=in:d=0.02,afade=t=out:st={max(0.0, d - 0.03):.6f}:d=0.03[sa{i}]")
+        pads.append(f"[v{i}][sa{i}]")
+    parts.append(f"{''.join(pads)}concat=n={len(pads)}:v=1:a=1[base][aout]")
+    return ";".join(parts)
+
+
+def combine_crops(crops: list[dict | None], durations: list[float], center: float) -> list[list[float]]:
+    """One face path for the joined preview: each scene's keys moved to where the scene starts.
+
+    The camera holds until a join and then jumps, as the export does with one path per scene.
+    A scene without a path (detection failed) keeps a centred crop.
+    """
+    keys: list[list[float]] = []
+    offset = 0.0
+    for crop, d in zip(crops, durations):
+        own = (crop or {}).get("keys") or [[0.0, center]]
+        if keys:
+            keys.append([round(offset - 0.001, 3), keys[-1][1]])
+        for t, x in [[0.0, own[0][1]], *own]:
+            if t < d and (not keys or round(offset + t, 3) > keys[-1][0]):
+                keys.append([round(offset + t, 3), x])
+        offset += d
+    return keys
+
+
 # -- render ----------------------------------------------------------------
 
 def run_ffmpeg(cmd: list[str], duration: float, tmpdir: str, on_progress):
@@ -1175,16 +1313,12 @@ def _run_export_job(job: dict, params: dict):
     notes: list[str] = []
     try:
         url = clean_url(str(params.get("url", "")))
-        start = max(0.0, float(params.get("start", 0)))
-        end = float(params.get("end", 0))
+        segs = parse_segments(params)
+        many = len(segs) > 1
         aspect = params.get("aspectRatio") if params.get("aspectRatio") in ASPECTS else "9:16_blur"
         style = params.get("captionStyle") if params.get("captionStyle") in CAPTION_STYLES else "viral"
         position = params.get("captionPosition") if params.get("captionPosition") in POSITIONS else "bottom"
         cues = _clean_cues(params.get("cues")) if style != "none" else []
-        if end - start < 0.5:
-            raise UserError("Klip terlalu pendek untuk diekspor.")
-        if end - start > MAX_CLIP_SECONDS:
-            raise UserError("Klip lebih dari 10 menit. Pendekkan dulu sebelum diekspor.")
 
         ffmpeg_bin = get_ffmpeg_path()
         if not ffmpeg_bin:
@@ -1195,40 +1329,61 @@ def _run_export_job(job: dict, params: dict):
             _render_slot.acquire()
         try:
             tmpdir = job["tmpdir"]
-            _update(job, status="downloading", progress=8, message="Mengunduh segmen video (maks. 1080p)...")
-            raw = download_section(url, start, end, tmpdir, ffmpeg_bin)
-            iw, ih, duration = probe_video(ffmpeg_bin, raw)
-            duration = duration or (end - start)
+            n = len(segs)
+            raws, probes = [], []
+            # Each scene is probed while the next one downloads (starting ffmpeg can take seconds).
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                for i, (start, end) in enumerate(segs):
+                    where = os.path.join(tmpdir, f"scene_{i:02d}") if many else tmpdir
+                    os.makedirs(where, exist_ok=True)
+                    _update(job, status="downloading", progress=8 + round(26 * i / n),
+                            message=f"Mengunduh adegan {i + 1} dari {n} (maks. 1080p)..." if many
+                            else "Mengunduh segmen video (maks. 1080p)...")
+                    raws.append(download_section(url, start, end, where, ffmpeg_bin))
+                    probes.append(pool.submit(probe_media, ffmpeg_bin, raws[-1]))
+                metas = [p.result() for p in probes]
+            duration = sum(e - s for s, e in segs) if many else (metas[0]["duration"] or segs[0][1] - segs[0][0])
 
             vertical = aspect != "16:9"
             out_w, out_h = (1080, 1920) if vertical else (1920, 1080)
             layout = {"16:9": "fit", "9:16_blur": "blur", "9:16_crop": "crop"}[aspect]
-            crop_w = round(ih * 9 / 16) // 2 * 2
-            if layout == "crop" and crop_w > iw:
+            iw, ih = metas[0]["width"], metas[0]["height"]
+            if layout == "crop" and round(ih * 9 / 16) // 2 * 2 > iw:
                 layout = "blur"  # the source is already narrower than 9:16
                 notes.append("Video sumber sudah vertikal, jadi dipakai latar blur.")
 
-            crop_expr = None
+            # One face path per scene: a cut between scenes is a cut for the camera too.
+            crop_ws = [min(round(m["height"] * 9 / 16) // 2 * 2, m["width"] // 2 * 2) for m in metas]
+            exprs: list[str | None] = [None] * n
+            faceless: list[int] = []
             if layout == "crop":
-                reused = _preview_crop(params.get("previewId"), url, start, end)
-                if reused:
-                    # Same path the preview showed, so the export frames exactly like it.
-                    keys = [(t, min(iw - crop_w, max(0.0, f * iw))) for t, f in reused["keys"]]
-                    if not reused["faces"]:
-                        notes.append("Tidak ada wajah terdeteksi, jadi dipakai potongan tengah.")
-                    crop_expr = crop_x_expression(keys)
-                elif has_module("cv2"):
-                    _update(job, status="analyzing", progress=35, message="Mendeteksi wajah...")
-                    samples, _ = analyze_faces(
-                        raw, duration, lambda f: _update(job, progress=35 + round(20 * f))
-                    )
-                    keys = plan_crop_path(samples, iw, crop_w)
-                    if not any(s["faces"] for s in samples):
-                        notes.append("Tidak ada wajah terdeteksi, jadi dipakai potongan tengah.")
-                    crop_expr = crop_x_expression(keys)
-                else:
+                if not has_module("cv2"):
                     notes.append("Deteksi wajah belum terpasang, jadi dipakai potongan tengah.")
-                    crop_expr = f"{(iw - crop_w) / 2:.1f}"
+                for i, ((start, end), raw, m, crop_w) in enumerate(zip(segs, raws, metas, crop_ws)):
+                    siw = m["width"]
+                    reused = _preview_crop(None if many else params.get("previewId"), url, start, end)
+                    if reused:
+                        # Same path the preview showed, so the export frames exactly like it.
+                        keys = [(t, min(siw - crop_w, max(0.0, f * siw))) for t, f in reused["keys"]]
+                        found = reused["faces"]
+                    elif has_module("cv2"):
+                        lo, span = 35 + 20 * i / n, 20 / n
+                        _update(job, status="analyzing", progress=round(lo),
+                                message=f"Mendeteksi wajah di adegan {i + 1} dari {n}..." if many else "Mendeteksi wajah...")
+                        samples, _ = analyze_faces(raw, m["duration"] or end - start,
+                                                   lambda f: _update(job, progress=round(lo + span * f)))
+                        keys = plan_crop_path(samples, siw, crop_w)
+                        found = any(s["faces"] for s in samples)
+                    else:
+                        keys, found = None, True
+                    exprs[i] = crop_x_expression(keys) if keys else f"{(siw - crop_w) / 2:.1f}"
+                    if not found:
+                        faceless.append(i + 1)
+            if faceless and len(faceless) == n:
+                notes.append("Tidak ada wajah terdeteksi, jadi dipakai potongan tengah.")
+            elif faceless:
+                notes.append(f"Di adegan {', '.join(map(str, faceless))} tidak ada wajah terdeteksi, "
+                             "jadi di sana dipakai potongan tengah.")
 
             captions = None
             if cues:
@@ -1238,32 +1393,29 @@ def _run_export_job(job: dict, params: dict):
                 else:
                     notes.append("Caption dilewati karena Pillow belum terpasang.")
 
-            if layout == "crop":
-                graph = f"[0:v]crop=w={crop_w}:h={ih}:x='{crop_expr}':y=0,scale={out_w}:{out_h},setsar=1[base]"
-            elif layout == "blur":
-                bw, bh = out_w // 4, out_h // 4
-                graph = (
-                    f"[0:v]split=2[a][b];"
-                    f"[a]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
-                    f"boxblur=10:2,scale={out_w}:{out_h}[bg];"
-                    f"[b]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease[fg];"
-                    f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[base]"
-                )
+            if many:
+                scenes = [
+                    layout_graph(f"[s{i}]", f"[l{i}]", layout, m["height"], crop_ws[i], exprs[i], out_w, out_h, tag=str(i))
+                    for i, m in enumerate(metas)
+                ]
+                graph = join_graph(scenes, [m["audio"] for m in metas], [e - s for s, e in segs],
+                                   frame_rate(metas[0]["fps"]))
+                sound = ["-map", "[aout]"]
             else:
-                graph = (
-                    f"[0:v]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
-                    f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2,setsar=1[base]"
-                )
-            cmd = [ffmpeg_bin, "-hide_banner", "-y", "-i", raw]
+                graph = layout_graph("[0:v]", "[base]", layout, ih, crop_ws[0], exprs[0], out_w, out_h)
+                sound = ["-map", "0:a?"]
+            cmd = [ffmpeg_bin, "-hide_banner", "-y"]
+            for raw in raws:
+                cmd += ["-i", raw]
             if captions:
                 playlist, band_y = captions
                 cmd += ["-f", "concat", "-safe", "0", "-i", playlist]
-                graph += f";[base][1:v]overlay=0:{band_y}:eof_action=pass:format=auto[vout]"
+                graph += f";[base][{n}:v]overlay=0:{band_y}:eof_action=pass:format=auto[vout]"
             else:
                 graph += ";[base]null[vout]"
             final = os.path.join(tmpdir, "final.mp4")
             cmd += [
-                "-filter_complex", graph, "-map", "[vout]", "-map", "0:a?",
+                "-filter_complex", graph, "-map", "[vout]", *sound,
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
                 "-progress", "pipe:1", "-nostats", final,
@@ -1286,6 +1438,7 @@ def start_export(params: dict) -> str:
     url = clean_url(str(params.get("url", "")))
     if not url or not is_youtube(url):
         raise UserError("Link YouTube tidak valid.")
+    parse_segments(params)  # a bad scene list is answered right away, not as a failed job
     _purge_old_jobs()
     job_id = uuid.uuid4().hex
     job = {
@@ -1326,50 +1479,109 @@ def _analyze_preview(job: dict, raw: str, iw: int, crop_w: int):
 
 
 def _run_preview_job(job: dict):
-    if not _preview_slot.acquire(blocking=False):
-        _update(job, message="Menunggu pratinjau lain selesai...")
-        _preview_slot.acquire()
     try:
         ffmpeg_bin = get_ffmpeg_path()
         if not ffmpeg_bin:
             raise UserError("FFmpeg belum terpasang. Mac: brew install ffmpeg. Windows: winget install ffmpeg.")
-        _update(job, status="downloading", progress=15, message=f"Mengunduh potongan pratinjau ({PREVIEW_HEIGHT}p)...")
-        raw = download_section(job["url"], job["start"], job["end"], job["tmpdir"], ffmpeg_bin,
-                               height=PREVIEW_HEIGHT, preview=True)
-        iw, ih, duration = probe_video(ffmpeg_bin, raw)
+        if not _preview_slot.acquire(blocking=False):
+            _update(job, message="Menunggu pratinjau lain selesai...")
+            _preview_slot.acquire()
+        try:
+            _update(job, status="downloading", progress=15, message=f"Mengunduh potongan pratinjau ({PREVIEW_HEIGHT}p)...")
+            raw = download_section(job["url"], job["start"], job["end"], job["tmpdir"], ffmpeg_bin,
+                                   height=PREVIEW_HEIGHT, preview=True)
+            m = probe_media(ffmpeg_bin, raw)
+        finally:
+            _preview_slot.release()  # the next scene can download while this one looks for faces
+        iw, ih = m["width"], m["height"]
         crop_w = round(ih * 9 / 16) // 2 * 2
         crop_state = "none" if crop_w > iw else ("pending" if has_module("cv2") else "unavailable")
+        # fps and audio are kept for compilations: starting ffmpeg just to probe can take seconds.
         _update(job, status="ready", progress=100, message="Pratinjau siap.", file=raw, width=iw, height=ih,
-                duration=duration or job["end"] - job["start"], crop_state=crop_state)
+                duration=m["duration"] or job["end"] - job["start"], fps=m["fps"], audio=m["audio"],
+                crop_state=crop_state)
         if crop_state == "pending":
-            _analyze_preview(job, raw, iw, crop_w)
+            with _face_slot:
+                _analyze_preview(job, raw, iw, crop_w)
     except UserError as e:
         _update(job, status="error", error=str(e), message=f"Gagal: {e}")
     except Exception as e:
         sys.stderr.write(f"[helper] preview error: {e!r}\n")
         _update(job, status="error", error=f"Terjadi kesalahan: {e}", message="Gagal.")
-    finally:
-        _preview_slot.release()
 
 
-def start_preview(params: dict) -> str:
-    """Id of a preview job for this clip; an existing one for the same clip is reused."""
-    url = clean_url(str(params.get("url", "")))
-    if not url or not is_youtube(url):
-        raise UserError("Link YouTube tidak valid.")
+CROP_SETTLED = ("done", "error", "none", "unavailable")
+
+
+def _run_compilation_preview(job: dict):
+    """Joins the scenes' own previews into one video, then their face paths into one path."""
     try:
-        start = round(max(0.0, float(params.get("start", 0))), 2)
-        end = round(float(params.get("end", 0)), 2)
-    except (TypeError, ValueError) as e:
-        raise UserError("Waktu klip tidak valid.") from e
-    if not (math.isfinite(start) and math.isfinite(end)) or end - start < 0.5:
-        raise UserError("Klip terlalu pendek untuk dipratinjau.")
-    if end - start > MAX_CLIP_SECONDS:
-        raise UserError("Klip lebih dari 10 menit. Pendekkan dulu sebelum dipratinjau.")
-    _purge_old_jobs()
+        ffmpeg_bin = get_ffmpeg_path()
+        if not ffmpeg_bin:
+            raise UserError("FFmpeg belum terpasang. Mac: brew install ffmpeg. Windows: winget install ffmpeg.")
+        with _jobs_lock:
+            parts = [_export_jobs[p] for p in job["parts"]]
+        n = len(parts)
+        while True:
+            with _jobs_lock:
+                states = [p["status"] for p in parts]
+            failed = next((i for i, s in enumerate(states) if s == "error"), None)
+            if failed is not None:
+                raise UserError(f"Adegan {failed + 1}: {parts[failed].get('error') or 'gagal disiapkan.'}")
+            done = states.count("ready")
+            if done == n:
+                break
+            _update(job, status="downloading", progress=5 + round(80 * done / n),
+                    message=f"Mengunduh adegan {done + 1} dari {n} ({PREVIEW_HEIGHT}p)...")
+            time.sleep(0.25)
+
+        _update(job, progress=86, message="Menggabungkan adegan...")
+        metas = [{k: p[k] for k in ("width", "height", "fps", "audio")} for p in parts]
+        iw, ih = metas[0]["width"], metas[0]["height"]
+        durations = [e - s for s, e in job["segments"]]
+        scenes = [layout_graph(f"[s{i}]", f"[l{i}]", "same", 0, 0, None, iw, ih) for i in range(n)]
+        graph = join_graph(scenes, [m["audio"] for m in metas], durations, frame_rate(metas[0]["fps"]))
+        out = os.path.join(job["tmpdir"], "preview.mp4")
+        cmd = [ffmpeg_bin, "-hide_banner", "-y"]
+        for p in parts:
+            cmd += ["-i", p["file"]]
+        cmd += ["-filter_complex", graph, "-map", "[base]", "-map", "[aout]", *PREVIEW_ENCODE,
+                "-progress", "pipe:1", "-nostats", out]
+        run_ffmpeg(cmd, sum(durations), job["tmpdir"], lambda f: _update(job, progress=86 + round(13 * f)))
+
+        crop_w = round(ih * 9 / 16) // 2 * 2
+        crop_state = "none" if crop_w > iw else ("pending" if has_module("cv2") else "unavailable")
+        _update(job, status="ready", progress=100, message="Pratinjau siap.", file=out, width=iw, height=ih,
+                duration=sum(durations), crop_state=crop_state)
+        if crop_state != "pending":
+            return
+        while True:
+            with _jobs_lock:
+                states = [p.get("crop_state") for p in parts]
+                progress = sum(100 if p.get("crop_state") in CROP_SETTLED else p.get("crop_progress", 0)
+                               for p in parts) // n
+            if all(s in CROP_SETTLED for s in states):
+                break
+            _update(job, crop_state="running" if "running" in states else "pending", crop_progress=progress)
+            time.sleep(0.25)
+        crops = [p.get("crop") if p.get("crop_state") == "done" else None for p in parts]
+        _update(job, crop_state="done", crop_progress=100, crop={
+            "keys": combine_crops(crops, durations, round((1 - crop_w / iw) / 2, 5)),
+            "width": crop_w / iw,
+            "faces": any(c and c["faces"] for c in crops),
+        })
+    except UserError as e:
+        _update(job, status="error", error=str(e), message=f"Gagal: {e}")
+    except Exception as e:
+        sys.stderr.write(f"[helper] compilation preview error: {e!r}\n")
+        _update(job, status="error", error=f"Terjadi kesalahan: {e}", message="Gagal.")
+
+
+def _scene_preview(url: str, start: float, end: float) -> str:
+    """Id of the preview of one scene; an existing one for the same scene is reused."""
     with _jobs_lock:
         for j in _export_jobs.values():
-            if (j.get("kind") == "preview" and j["status"] != "error"
+            if (j.get("kind") == "preview" and "parts" not in j and j["status"] != "error"
                     and (j["url"], j["start"], j["end"]) == (url, start, end)):
                 j["touched"] = time.time()
                 return j["id"]
@@ -1391,6 +1603,41 @@ def start_preview(params: dict) -> str:
     return job_id
 
 
+def start_preview(params: dict) -> str:
+    """Id of a preview job for a clip (start/end) or a compilation (segments); same input, same job."""
+    url = clean_url(str(params.get("url", "")))
+    if not url or not is_youtube(url):
+        raise UserError("Link YouTube tidak valid.")
+    segs = [(round(s, 2), round(e, 2)) for s, e in parse_segments(params)]
+    _purge_old_jobs()
+    if len(segs) == 1:
+        return _scene_preview(url, *segs[0])
+    with _jobs_lock:
+        for j in _export_jobs.values():
+            if (j.get("kind") == "preview" and j.get("segments") == segs and j["url"] == url
+                    and j["status"] != "error"):
+                j["touched"] = time.time()
+                return j["id"]
+    parts = [_scene_preview(url, s, e) for s, e in segs]
+    job_id = uuid.uuid4().hex
+    job = {
+        "id": job_id,
+        "kind": "preview",
+        "status": "pending",
+        "progress": 5,
+        "message": "Menyiapkan pratinjau...",
+        "created_at": time.time(),
+        "tmpdir": tempfile.mkdtemp(prefix="autoclip_preview_"),
+        "url": url,
+        "segments": segs,
+        "parts": parts,
+    }
+    with _jobs_lock:
+        _export_jobs[job_id] = job
+    threading.Thread(target=_run_compilation_preview, args=(job,), daemon=True).start()
+    return job_id
+
+
 def preview_status(job: dict) -> dict:
     return {
         "ok": True,
@@ -1409,14 +1656,16 @@ def preview_status(job: dict) -> dict:
 
 
 def _preview_crop(preview_id, url: str, start: float, end: float) -> dict | None:
-    """The face path a preview already found for exactly this clip, if any."""
+    """The face path a preview already found for exactly this scene, if any (that preview first)."""
+    def fits(j):
+        return (j is not None and j.get("kind") == "preview" and "parts" not in j and j.get("crop_state") == "done"
+                and j["url"] == url and abs(j["start"] - start) <= 0.02 and abs(j["end"] - end) <= 0.02)
+
     with _jobs_lock:
         job = _export_jobs.get(str(preview_id or ""))
-    if not job or job.get("kind") != "preview" or job.get("crop_state") != "done":
-        return None
-    if job["url"] != url or abs(job["start"] - start) > 0.02 or abs(job["end"] - end) > 0.02:
-        return None
-    return job["crop"]
+        if not fits(job):
+            job = next((j for j in _export_jobs.values() if fits(j)), None)
+        return job["crop"] if job else None
 
 
 def ensure_optional_packages():

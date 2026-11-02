@@ -5,9 +5,11 @@
   import type { Word } from '../lib/types';
 
   interface Props {
-    words: Word[];
-    w0: number;
-    w1: number;
+    words?: Word[];
+    w0?: number;
+    w1?: number;
+    /** Ready-made cues timed from clipStart (e.g. a compilation's); words/w0/w1 are then unused. */
+    cues?: CaptionCue[];
     clipStart: number;
     clipEnd: number;
     currentTime: number;
@@ -24,9 +26,10 @@
   }
 
   let {
-    words,
-    w0,
-    w1,
+    words = [],
+    w0 = 0,
+    w1 = -1,
+    cues: given,
     clipStart,
     clipEnd,
     currentTime,
@@ -38,12 +41,12 @@
     vertical = true,
   }: Props = $props();
 
-  const clipWords = $derived(words.slice(w0, w1 + 1));
   const cues = $derived(
-    groupWordsIntoCues(clipWords, clipStart, clipEnd, {
-      uppercase,
-      maxWordsPerCue: 5,
-    })
+    given ??
+      groupWordsIntoCues(words.slice(w0, w1 + 1), clipStart, clipEnd, {
+        uppercase,
+        maxWordsPerCue: 5,
+      })
   );
 
   const relTime = $derived(Math.max(0, currentTime - clipStart));

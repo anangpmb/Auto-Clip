@@ -74,17 +74,22 @@ export function saveWords(id: string, words: Word[]) {
   write(wordsKey(id), words.map((w) => [w.s, w.e, w.t]));
 }
 
-export function saveProject(meta: ProjectMeta, clips: Clip[]) {
+export function saveProject(meta: ProjectMeta, clips: Clip[], compilation: string[] = []) {
   const updated = { ...meta, updatedAt: new Date().toISOString() };
-  write(metaKey(meta.id), { meta: updated, clips });
+  write(metaKey(meta.id), { meta: updated, clips, compilation });
   upsertIndex(updated, clips.length);
 }
 
 export function loadProject(id: string): LoadedProject | null {
-  const data = read<{ meta: ProjectMeta; clips: Clip[] }>(metaKey(id));
+  const data = read<{ meta: ProjectMeta; clips: Clip[]; compilation?: string[] }>(metaKey(id));
   const words = read<[number, number, string][]>(wordsKey(id));
   if (!data || !words) return null;
-  return { meta: data.meta, clips: data.clips, words: words.map(([s, e, t]) => ({ s, e, t })) };
+  return {
+    meta: data.meta,
+    clips: data.clips,
+    compilation: data.compilation ?? [],
+    words: words.map(([s, e, t]) => ({ s, e, t })),
+  };
 }
 
 export function deleteProject(id: string) {
