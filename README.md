@@ -94,11 +94,20 @@ Proyek tersimpan otomatis di browser (localStorage).
 Transkrip "otomatis" dari YouTube punya waktu per kata yang asli, jadi potongannya paling
 presisi. Subtitle "manual" teksnya lebih rapi tapi waktu per katanya diperkirakan.
 
-## Ekspor video MP4
+## Pratinjau hasil akhir & ekspor video MP4
 
-Tombol **Ekspor Video & Subtitle** membuat helper:
+Tombol **Pratinjau Hasil Akhir & Ekspor** membuka pratinjau video jadi sebelum dirender.
+Helper mengambil salinan ringan klip (480p, biasanya beberapa detik), lalu web app
+menampilkannya persis seperti hasil ekspor: format 9:16 blur / ikuti wajah / 16:9, kamera
+yang mengikuti wajah, dan caption dengan ukuran serta posisi yang sama. Ganti format atau
+gaya caption, pratinjaunya langsung berubah. Jalur wajah dari pratinjau dipakai ulang
+saat ekspor, jadi hasilnya sama dan ekspor lebih cepat. Butuh helper 0.4.0 atau lebih baru.
 
-1. Mengunduh hanya potongan klip itu, maksimal 1080p.
+Saat **Mulai Render Video**, helper:
+
+1. Mengunduh hanya potongan klip itu, maksimal 1080p. Potongan diambil langsung per
+   fragmen DASH secara paralel (YouTube memperlambat unduhan potongan biasa sampai
+   kira-kira secepat video diputar); kalau tidak bisa, otomatis memakai cara yt-dlp biasa.
 2. Untuk **9:16 Vertikal (Ikuti Wajah)**: mendeteksi wajah (OpenCV + model YuNet) dan
    pergantian shot, lalu menggerakkan "kamera" virtual. Kamera diam kalau wajah hanya
    bergeser sedikit, ikut bergeser halus kalau subjek berjalan, dan langsung pindah saat

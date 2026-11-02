@@ -17,6 +17,8 @@ export interface HelperHealth {
 
 /** Oldest helper whose /export understands `cues` and face tracking. */
 export const EXPORT_HELPER_VERSION = '0.3.0';
+/** Oldest helper that can prepare a preview of the final video. */
+export const PREVIEW_HELPER_VERSION = '0.4.0';
 
 /** True when version a is older than b (dotted numbers). */
 export function versionBefore(a: string | undefined, b: string): boolean {
@@ -48,6 +50,32 @@ export interface ExportParams {
   captionPosition?: 'bottom' | 'center' | 'top';
   /** Caption cues with word timings relative to the clip start; the helper draws them. */
   cues?: CaptionCue[];
+  /** Preview of this clip; its face path is reused so the export frames like the preview. */
+  previewId?: string;
+}
+
+/** Face-following path for the 9:16 crop: [seconds from clip start, left edge as a share of the width]. */
+export interface CropPath {
+  keys: [number, number][];
+  /** Crop window width as a share of the source width. */
+  width: number;
+  faces: boolean;
+}
+
+export interface PreviewStatus {
+  ok: boolean;
+  id: string;
+  status: 'pending' | 'downloading' | 'ready' | 'error';
+  progress: number;
+  message: string;
+  error?: string | null;
+  width?: number | null;
+  height?: number | null;
+  duration?: number | null;
+  /** pending/running: still looking for faces; none: source already vertical; unavailable: no OpenCV. */
+  crop_state?: 'pending' | 'running' | 'done' | 'none' | 'unavailable' | 'error' | null;
+  crop_progress?: number;
+  crop?: CropPath | null;
 }
 
 export interface ExportStatus {
@@ -139,4 +167,37 @@ export async function checkExportStatus(helperUrl: string, jobId: string): Promi
  */
 export function getExportDownloadUrl(helperUrl: string, jobId: string): string {
   return `${base(helperUrl)}/export/download?jobId=${encodeURIComponent(jobId)}`;
+}
+
+/** Asks the helper for a light copy of the clip to preview; the same clip reuses its copy. */
+export async function startPreview(helperUrl: string, params: { url: string; start: number; end: number }): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetch(`${base(helperUrl)}/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+  } catch {
+    throw new Error('Tidak bisa menghubungi helper untuk menyiapkan pratinjau.');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Helper error (${res.status})`);
+  return data.id as string;
+}
+
+export async function checkPreviewStatus(helperUrl: string, id: string): Promise<PreviewStatus> {
+  let res: Response;
+  try {
+    res = await fetch(`${base(helperUrl)}/preview/status?id=${encodeURIComponent(id)}`, { cache: 'no-store' });
+  } catch {
+    throw new Error('Helper tidak menjawab saat menyiapkan pratinjau.');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Pratinjau tidak ditemukan.');
+  return data as PreviewStatus;
+}
+
+export function previewVideoUrl(helperUrl: string, id: string): string {
+  return `${base(helperUrl)}/preview/video?id=${encodeURIComponent(id)}`;
 }

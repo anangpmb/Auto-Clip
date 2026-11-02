@@ -219,8 +219,14 @@
       </div>
 
       <div class="export-action">
-        <button class="export-btn" onclick={() => (showExportModal = true)}>
-          🎬 Ekspor Video & Subtitle
+        <button
+          class="export-btn"
+          onclick={() => {
+            player?.pause(); // the final-result preview plays its own sound
+            showExportModal = true;
+          }}
+        >
+          🎬 Pratinjau Hasil Akhir & Ekspor
         </button>
       </div>
 

@@ -1,10 +1,8 @@
 <script lang="ts">
-  import { onDestroy, untrack } from 'svelte';
+  import { onDestroy } from 'svelte';
+  import FinalPreview from './FinalPreview.svelte';
   import type { Clip, Settings, Word } from '../lib/types';
   import {
-    type AspectRatio,
-    type CaptionPosition,
-    type CaptionStyle,
     buildExportCommand,
     downloadFile,
     generateAss,
@@ -17,6 +15,7 @@
     checkExportStatus,
     EXPORT_HELPER_VERSION,
     getExportDownloadUrl,
+    PREVIEW_HELPER_VERSION,
     startExport,
     versionBefore,
     type HelperHealth,
@@ -51,11 +50,25 @@
   const duration = $derived(bounds.end - bounds.start);
   const clipWords = $derived(words.slice(clip.w0, clip.w1 + 1));
 
-  let aspectRatio = $state<AspectRatio>(untrack(() => settings.aspectRatio || '9:16_blur'));
-  let captionEnabled = $state(untrack(() => settings.captionEnabled ?? true));
-  let captionStyle = $state<CaptionStyle>(untrack(() => settings.captionStyle || 'viral'));
-  let captionPosition = $state<CaptionPosition>(untrack(() => settings.captionPosition || 'bottom'));
-  let uppercase = $state(untrack(() => settings.captionUppercase ?? true));
+  // The choices here are the saved settings, so the preview, the editor and the next export agree.
+  const aspectRatio = $derived(settings.aspectRatio);
+  const captionEnabled = $derived(settings.captionEnabled);
+  const captionStyle = $derived(settings.captionStyle);
+  const captionPosition = $derived(settings.captionPosition);
+  const uppercase = $derived(settings.captionUppercase);
+  const sourceUrl = $derived(videoUrl || `https://www.youtube.com/watch?v=${videoId}`);
+
+  /** Set by the preview; the export reuses its face path so both frame the subject alike. */
+  let previewId = $state('');
+  const previewBlocked = $derived(
+    !helperOk
+      ? `Pratinjau hasil akhir butuh helper yang berjalan di ${settings.helperUrl}.`
+      : versionBefore(helperHealth?.version, PREVIEW_HELPER_VERSION)
+        ? `Pratinjau butuh helper versi ${PREVIEW_HELPER_VERSION} atau lebih baru (sekarang ${helperHealth?.version ?? 'lama'}). Tutup helper, lalu buka lagi lewat launcher AutoClip.`
+        : !helperHealth?.ffmpeg
+          ? 'Pratinjau butuh FFmpeg di komputer ini (Mac: brew install ffmpeg, Windows: winget install ffmpeg).'
+          : '',
+  );
 
   // Export job state
   let isExporting = $state(false);
@@ -108,7 +121,7 @@
   );
 
   const exportCmd = $derived(
-    buildExportCommand(videoUrl || `https://www.youtube.com/watch?v=${videoId}`, bounds.start, bounds.end, clip.title, {
+    buildExportCommand(sourceUrl, bounds.start, bounds.end, clip.title, {
       aspectRatio,
       burnCaptions: captionEnabled,
       srtFilename: `${safeTitle}.srt`,
@@ -131,7 +144,7 @@
 
     try {
       const { jobId } = await startExport(settings.helperUrl, {
-        url: videoUrl || `https://www.youtube.com/watch?v=${videoId}`,
+        url: sourceUrl,
         videoId,
         title: clip.title,
         start: bounds.start,
@@ -140,6 +153,7 @@
         captionStyle: captionEnabled ? captionStyle : 'none',
         captionPosition,
         cues,
+        previewId: previewId || undefined,
       });
 
       pollTimer = window.setInterval(async () => {
@@ -199,11 +213,14 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<!-- Esc closes the dialog wherever focus is (e.g. after the download link took it). -->
+<svelte:window onkeydown={(e) => e.key === 'Escape' && !e.defaultPrevented && onclose()} />
+
+<!-- Keyboard users close it with Esc (window handler above). -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_click_events_have_key_events -->
 <div
   class="backdrop"
   onclick={onclose}
-  onkeydown={(e) => e.key === 'Escape' && onclose()}
   role="dialog"
   aria-modal="true"
   aria-labelledby="modal-title"
@@ -214,7 +231,7 @@
   <div class="modal" onclick={(e) => e.stopPropagation()} role="document">
     <div class="modal-head">
       <div>
-        <h2 id="modal-title">🎬 Ekspor Video & Auto Caption</h2>
+        <h2 id="modal-title">🎬 Pratinjau & Ekspor</h2>
         <p class="subtitle">
           <b>{clip.title}</b> · {fmtTime(bounds.start, true)} → {fmtTime(bounds.end, true)} ({fmtDuration(duration)})
         </p>
@@ -223,182 +240,214 @@
     </div>
 
     <div class="modal-body">
-      <!-- Section 1: Aspect Ratio -->
-      <div class="form-group">
-        <label class="group-title" for="aspectRatioSelect">Rasio Aspek Video</label>
-        <div class="aspect-cards">
-          <label class="radio-card" class:checked={aspectRatio === '9:16_blur'}>
-            <input type="radio" name="aspectRatio" value="9:16_blur" bind:group={aspectRatio} />
-            <div class="card-icon">📱</div>
-            <div class="card-info">
-              <span class="card-name">9:16 Vertikal (Blur Background)</span>
-              <span class="card-desc">Format Shorts / Reels / TikTok. Video utuh dengan latar blur.</span>
-            </div>
-          </label>
-
-          <label class="radio-card" class:checked={aspectRatio === '9:16_crop'}>
-            <input type="radio" name="aspectRatio" value="9:16_crop" bind:group={aspectRatio} />
-            <div class="card-icon">🎯</div>
-            <div class="card-info">
-              <span class="card-name">9:16 Vertikal (Ikuti Wajah)</span>
-              <span class="card-desc">Penuh layar. Kamera otomatis mengikuti wajah supaya subjek selalu ada di dalam frame.</span>
-            </div>
-          </label>
-
-          <label class="radio-card" class:checked={aspectRatio === '16:9'}>
-            <input type="radio" name="aspectRatio" value="16:9" bind:group={aspectRatio} />
-            <div class="card-icon">🖥️</div>
-            <div class="card-info">
-              <span class="card-name">16:9 Horizontal (Asli)</span>
-              <span class="card-desc">Format lanskap standar YouTube asli.</span>
-            </div>
-          </label>
-        </div>
-      </div>
-
-      <!-- Section 2: Caption Settings -->
-      <div class="form-group">
-        <div class="caption-header">
-          <label class="toggle-label">
-            <input type="checkbox" bind:checked={captionEnabled} />
-            <span class="group-title" style="margin: 0;">Sematkan Auto Caption (Burn-in Subtitle)</span>
-          </label>
-        </div>
-
-        {#if captionEnabled}
-          <div class="caption-options">
-            <div class="sub-group">
-              <span class="label">Gaya Caption:</span>
-              <div class="pill-group">
-                <button
-                  type="button"
-                  class="pill"
-                  class:active={captionStyle === 'viral'}
-                  onclick={() => (captionStyle = 'viral')}
-                >
-                  🔥 Viral Highlight
-                </button>
-                <button
-                  type="button"
-                  class="pill"
-                  class:active={captionStyle === 'box'}
-                  onclick={() => (captionStyle = 'box')}
-                >
-                  ⬛ Modern Box
-                </button>
-                <button
-                  type="button"
-                  class="pill"
-                  class:active={captionStyle === 'neon'}
-                  onclick={() => (captionStyle = 'neon')}
-                >
-                  ✨ Neon Pop
-                </button>
-                <button
-                  type="button"
-                  class="pill"
-                  class:active={captionStyle === 'classic'}
-                  onclick={() => (captionStyle = 'classic')}
-                >
-                  📄 Klasik
-                </button>
-              </div>
-            </div>
-
-            <div class="sub-group-row">
-              <label class="row-item">
-                <span class="label">Posisi:</span>
-                <select bind:value={captionPosition}>
-                  <option value="bottom">Bawah (Rekomendasi)</option>
-                  <option value="center">Tengah (Podcast style)</option>
-                  <option value="top">Atas</option>
-                </select>
-              </label>
-
-              <label class="row-item checkbox-item">
-                <input type="checkbox" bind:checked={uppercase} />
-                <span>HURUF BESAR (ALL CAPS)</span>
-              </label>
-            </div>
-          </div>
-        {/if}
-      </div>
-
-      <!-- Section 3: Direct Render with Helper -->
-      <div class="export-box">
-        <div class="export-box-head">
-          <h3>⚡ Render & Unduh Video MP4 Langsung</h3>
-          <p>Helper mengunduh segmen klip (maks. 1080p), mengikuti wajah untuk potongan vertikal, lalu menyematkan caption.</p>
-        </div>
-
-        {#if isExporting}
-          <div class="progress-container">
-            <div class="progress-bar">
-              <div class="progress-fill" style="width: {exportProgress}%"></div>
-            </div>
-            <div class="progress-text">
-              <span>{exportMessage}</span>
-              <span class="pct">{exportProgress}%</span>
-            </div>
-          </div>
-        {:else if downloadReadyUrl}
-          <div class="ready-banner">
-            <span>🎉 Video berhasil dirender dan siap!</span>
-            <a href={downloadReadyUrl} class="button primary" download="{safeTitle}.mp4">Unduh Lagi (MP4)</a>
+      <!-- Final result: the clip framed and captioned exactly as the export will be -->
+      <section class="preview-col" aria-label="Pratinjau hasil akhir">
+        {#if previewBlocked}
+          <div class="preview-off">
+            <p>{previewBlocked}</p>
+            <p class="desc">Format dan caption tetap bisa kamu atur.</p>
           </div>
         {:else}
-          {#if helperOk && helperOutdated}
-            <div class="warn-box">
-              ⚠️ Helper kamu versi {helperHealth?.version ?? 'lama'}; ekspor butuh versi {EXPORT_HELPER_VERSION} atau lebih baru.
-              Tutup helper, lalu buka lagi lewat launcher AutoClip (Mac: otomatis mengambil versi terbaru). Di Windows, unduh
-              <a href="./autoclip_helper.py" download>autoclip_helper.py</a> terbaru ke folder helper.
-            </div>
-          {:else if helperOk}
-            <button class="primary large-btn" onclick={handleStartExport} disabled={!helperHealth?.ffmpeg}>
-              🚀 Mulai Render Video ({aspectRatio.startsWith('9:16') ? '9:16' : '16:9'})
-            </button>
-            {#each warnings as w (w)}
-              <div class="note-box">ℹ️ {w}</div>
-            {/each}
-          {:else}
-            <div class="warn-box">
-              ⚠️ Helper belum terhubung di <code>{settings.helperUrl}</code>. Jalankan helper di komputer kamu untuk render otomatis satu klik.
+          <FinalPreview
+            helperUrl={settings.helperUrl}
+            videoUrl={sourceUrl}
+            start={bounds.start}
+            end={bounds.end}
+            {words}
+            w0={clip.w0}
+            w1={clip.w1}
+            aspect={aspectRatio}
+            {captionEnabled}
+            {captionStyle}
+            {captionPosition}
+            {uppercase}
+            bind:previewId
+          />
+        {/if}
+      </section>
+
+      <div class="settings-col">
+        <!-- Section 1: Aspect Ratio -->
+        <div class="form-group">
+          <span class="group-title">Rasio Aspek Video</span>
+          <div class="aspect-cards">
+            <label class="radio-card" class:checked={aspectRatio === '9:16_blur'}>
+              <input type="radio" name="aspectRatio" value="9:16_blur" bind:group={settings.aspectRatio} />
+              <div class="card-icon">📱</div>
+              <div class="card-info">
+                <span class="card-name">9:16 Vertikal (Blur Background)</span>
+                <span class="card-desc">Format Shorts / Reels / TikTok. Video utuh dengan latar blur.</span>
+              </div>
+            </label>
+
+            <label class="radio-card" class:checked={aspectRatio === '9:16_crop'}>
+              <input type="radio" name="aspectRatio" value="9:16_crop" bind:group={settings.aspectRatio} />
+              <div class="card-icon">🎯</div>
+              <div class="card-info">
+                <span class="card-name">9:16 Vertikal (Ikuti Wajah)</span>
+                <span class="card-desc">Penuh layar. Kamera otomatis mengikuti wajah supaya subjek selalu ada di dalam frame.</span>
+              </div>
+            </label>
+
+            <label class="radio-card" class:checked={aspectRatio === '16:9'}>
+              <input type="radio" name="aspectRatio" value="16:9" bind:group={settings.aspectRatio} />
+              <div class="card-icon">🖥️</div>
+              <div class="card-info">
+                <span class="card-name">16:9 Horizontal (Asli)</span>
+                <span class="card-desc">Format lanskap standar YouTube asli.</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Section 2: Caption Settings -->
+        <div class="form-group">
+          <div class="caption-header">
+            <label class="toggle-label">
+              <input type="checkbox" bind:checked={settings.captionEnabled} />
+              <span class="group-title" style="margin: 0;">Sematkan Auto Caption (Burn-in Subtitle)</span>
+            </label>
+          </div>
+
+          {#if captionEnabled}
+            <div class="caption-options">
+              <div class="sub-group">
+                <span class="label">Gaya Caption:</span>
+                <div class="pill-group">
+                  <button
+                    type="button"
+                    class="pill"
+                    class:active={captionStyle === 'viral'}
+                    aria-pressed={captionStyle === 'viral'}
+                    onclick={() => (settings.captionStyle = 'viral')}
+                  >
+                    🔥 Viral Highlight
+                  </button>
+                  <button
+                    type="button"
+                    class="pill"
+                    class:active={captionStyle === 'box'}
+                    aria-pressed={captionStyle === 'box'}
+                    onclick={() => (settings.captionStyle = 'box')}
+                  >
+                    ⬛ Modern Box
+                  </button>
+                  <button
+                    type="button"
+                    class="pill"
+                    class:active={captionStyle === 'neon'}
+                    aria-pressed={captionStyle === 'neon'}
+                    onclick={() => (settings.captionStyle = 'neon')}
+                  >
+                    ✨ Neon Pop
+                  </button>
+                  <button
+                    type="button"
+                    class="pill"
+                    class:active={captionStyle === 'classic'}
+                    aria-pressed={captionStyle === 'classic'}
+                    onclick={() => (settings.captionStyle = 'classic')}
+                  >
+                    📄 Klasik
+                  </button>
+                </div>
+              </div>
+
+              <div class="sub-group-row">
+                <label class="row-item">
+                  <span class="label">Posisi:</span>
+                  <select bind:value={settings.captionPosition}>
+                    <option value="bottom">Bawah (Rekomendasi)</option>
+                    <option value="center">Tengah (Podcast style)</option>
+                    <option value="top">Atas</option>
+                  </select>
+                </label>
+
+                <label class="row-item checkbox-item">
+                  <input type="checkbox" bind:checked={settings.captionUppercase} />
+                  <span>HURUF BESAR (ALL CAPS)</span>
+                </label>
+              </div>
             </div>
           {/if}
-        {/if}
-
-        {#if exportError}
-          <div class="error-msg">{exportError}</div>
-        {/if}
-        {#each exportNotes as n (n)}
-          <div class="note-box">ℹ️ {n}</div>
-        {/each}
-      </div>
-
-      <!-- Section 4: Subtitle Files Download -->
-      <div class="form-group">
-        <span class="group-title">Unduh File Caption Terpisah</span>
-        <p class="desc">Ekspor transkrip klip ini sebagai file subtitle untuk CapCut, Premiere Pro, atau DaVinci Resolve.</p>
-        <div class="button-row">
-          <button type="button" onclick={handleDownloadSrt}>💾 Unduh .SRT</button>
-          <button type="button" onclick={handleDownloadVtt}>💾 Unduh .VTT</button>
-          <button type="button" onclick={handleDownloadAss}>💾 Unduh .ASS (Karaoke)</button>
         </div>
-      </div>
 
-      <!-- Section 5: Manual Terminal Command -->
-      <div class="form-group">
-        <div class="cmd-head">
-          <span class="group-title">Perintah Terminal (yt-dlp + FFmpeg)</span>
-          <button type="button" class="ghost small" onclick={copyCmd}>
-            {copiedCmd ? '✓ Disalin!' : 'Salin Perintah'}
-          </button>
+        <!-- Section 3: Direct Render with Helper -->
+        <div class="export-box">
+          <div class="export-box-head">
+            <h3>⚡ Render & Unduh Video MP4</h3>
+            <p>Hasilnya sama dengan pratinjau, dalam kualitas penuh (maks. 1080p).</p>
+          </div>
+
+          {#if isExporting}
+            <div class="progress-container">
+              <div class="progress-bar">
+                <div class="progress-fill" style="width: {exportProgress}%"></div>
+              </div>
+              <div class="progress-text">
+                <span>{exportMessage}</span>
+                <span class="pct">{exportProgress}%</span>
+              </div>
+            </div>
+          {:else if downloadReadyUrl}
+            <div class="ready-banner">
+              <span>🎉 Video berhasil dirender dan siap!</span>
+              <a href={downloadReadyUrl} class="button primary" download="{safeTitle}.mp4">Unduh Lagi (MP4)</a>
+            </div>
+          {:else}
+            {#if helperOk && helperOutdated}
+              <div class="warn-box">
+                ⚠️ Helper kamu versi {helperHealth?.version ?? 'lama'}; ekspor butuh versi {EXPORT_HELPER_VERSION} atau lebih baru.
+                Tutup helper, lalu buka lagi lewat launcher AutoClip (Mac: otomatis mengambil versi terbaru). Di Windows, unduh
+                <a href="./autoclip_helper.py" download>autoclip_helper.py</a> terbaru ke folder helper.
+              </div>
+            {:else if helperOk}
+              <button class="primary large-btn" onclick={handleStartExport} disabled={!helperHealth?.ffmpeg}>
+                🚀 Mulai Render Video ({aspectRatio.startsWith('9:16') ? '9:16' : '16:9'})
+              </button>
+              {#each warnings as w (w)}
+                <div class="note-box">ℹ️ {w}</div>
+              {/each}
+            {:else}
+              <div class="warn-box">
+                ⚠️ Helper belum terhubung di <code>{settings.helperUrl}</code>. Jalankan helper di komputer kamu untuk render otomatis satu klik.
+              </div>
+            {/if}
+          {/if}
+
+          {#if exportError}
+            <div class="error-msg">{exportError}</div>
+          {/if}
+          {#each exportNotes as n (n)}
+            <div class="note-box">ℹ️ {n}</div>
+          {/each}
         </div>
-        <p class="desc">
-          Untuk dijalankan sendiri di terminal. Perintah ini memakai potongan tengah (tanpa deteksi wajah) dan butuh FFmpeg dengan
-          libass untuk caption.
-        </p>
-        <pre class="cmd-block"><code>{exportCmd}</code></pre>
+
+        <!-- Section 4: Subtitle Files Download -->
+        <div class="form-group">
+          <span class="group-title">Unduh File Caption Terpisah</span>
+          <p class="desc">Ekspor transkrip klip ini sebagai file subtitle untuk CapCut, Premiere Pro, atau DaVinci Resolve.</p>
+          <div class="button-row">
+            <button type="button" onclick={handleDownloadSrt}>💾 Unduh .SRT</button>
+            <button type="button" onclick={handleDownloadVtt}>💾 Unduh .VTT</button>
+            <button type="button" onclick={handleDownloadAss}>💾 Unduh .ASS (Karaoke)</button>
+          </div>
+        </div>
+
+        <!-- Section 5: Manual Terminal Command -->
+        <details class="form-group manual">
+          <summary class="group-title">Perintah Terminal (yt-dlp + FFmpeg)</summary>
+          <div class="cmd-head">
+            <p class="desc">
+              Untuk dijalankan sendiri di terminal. Perintah ini memakai potongan tengah (tanpa deteksi wajah) dan butuh FFmpeg
+              dengan libass untuk caption.
+            </p>
+            <button type="button" class="ghost small" onclick={copyCmd}>
+              {copiedCmd ? '✓ Disalin!' : 'Salin Perintah'}
+            </button>
+          </div>
+          <pre class="cmd-block"><code>{exportCmd}</code></pre>
+        </details>
       </div>
     </div>
 
@@ -427,7 +476,7 @@
     border: 1px solid var(--border, #2d3340);
     border-radius: 12px;
     width: 100%;
-    max-width: 640px;
+    max-width: 1080px;
     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
     display: flex;
     flex-direction: column;
@@ -463,9 +512,63 @@
   .modal-body {
     padding: 20px;
     overflow-y: auto;
+    display: grid;
+    grid-template-columns: minmax(300px, 0.9fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 24px;
+  }
+
+  .preview-col {
+    /* The whole preview (frame, controls, notes) fits beside the settings without being cut off. */
+    --preview-stage-h: clamp(300px, calc(90vh - 330px), 600px);
+    position: sticky;
+    top: 0;
+    min-width: 0;
+  }
+
+  .preview-off {
+    display: grid;
+    place-content: center;
+    gap: 8px;
+    min-height: 300px;
+    height: var(--preview-stage-h);
+    padding: 24px;
+    border: 1px dashed var(--border, #2d3340);
+    border-radius: 12px;
+    text-align: center;
+    font-size: 13px;
+  }
+
+  .preview-off p {
+    margin: 0;
+  }
+
+  .settings-col {
     display: flex;
     flex-direction: column;
     gap: 20px;
+    min-width: 0;
+  }
+
+  .manual summary {
+    cursor: pointer;
+  }
+
+  .manual[open] summary {
+    margin-bottom: 4px;
+  }
+
+  @media (max-width: 860px) {
+    .modal-body {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .preview-col {
+      --preview-stage-h: min(56vh, 520px);
+      position: static;
+    }
+    .preview-off {
+      height: auto;
+    }
   }
 
   .form-group {
@@ -719,7 +822,8 @@
   .cmd-head {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
+    gap: 12px;
   }
 
   .cmd-block {

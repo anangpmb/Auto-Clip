@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import copy
 import hashlib
 import importlib.util
 import json
@@ -23,6 +24,7 @@ import os
 import re
 import shutil
 import ssl
+import struct
 import subprocess
 import sys
 import tempfile
@@ -31,11 +33,12 @@ import time
 import urllib.request
 import uuid
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 DEFAULT_PORT = 8765
 DEV_ORIGINS = {
     "http://localhost:5173",
@@ -67,6 +70,7 @@ class Config:
 
 CFG = Config()
 _cache: dict[str, tuple[float, dict]] = {}
+_info_cache: dict[str, tuple[float, dict]] = {}  # yt-dlp info by URL, reused by downloads
 _cache_lock = threading.Lock()
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -232,6 +236,26 @@ def parse_json3(raw: bytes) -> tuple[list[list], bool]:
     return words, estimated > 0.25 * max(1, len(words))
 
 
+def remember_info(info: dict, *urls: str):
+    """Keep yt-dlp's info so a later download can skip the slow extraction (~10 s)."""
+    with _cache_lock:
+        for u in urls:
+            if u:
+                _info_cache[u] = (time.time(), info)
+
+
+def recall_info(url: str) -> dict | None:
+    """A private copy of recently extracted info (downloading mutates it), or None."""
+    with _cache_lock:
+        hit = _info_cache.get(url)
+    if not hit or time.time() - hit[0] >= CACHE_TTL:
+        return None
+    try:
+        return copy.deepcopy(hit[1])
+    except Exception:
+        return None
+
+
 def load_video(url: str) -> dict:
     with _cache_lock:
         hit = _cache.get(url)
@@ -250,6 +274,8 @@ def load_video(url: str) -> dict:
         raise UserError("Saat ini hanya video YouTube yang didukung.")
     if info.get("is_live"):
         raise UserError("Siaran langsung belum didukung. Tunggu sampai siarannya selesai.")
+    # The web app sends the canonical link back for previews and exports.
+    remember_info(info, url, clean_url(info.get("webpage_url") or ""))
     entry = {
         "video": {
             "id": info.get("id"),
@@ -370,10 +396,13 @@ POSITIONS = ("bottom", "center", "top")
 MAX_CLIP_SECONDS = 10 * 60
 JOB_TTL = 2 * 60 * 60  # finished exports stay downloadable this long
 SAMPLE_STEP = 0.25  # seconds between frames checked for faces
+PREVIEW_HEIGHT = 480
+MAX_PREVIEWS = 6  # previews kept on disk; older ones are dropped
 
-_export_jobs: dict[str, dict] = {}
+_export_jobs: dict[str, dict] = {}  # exports and previews, told apart by "kind"
 _jobs_lock = threading.Lock()
 _render_slot = threading.Semaphore(1)  # one export at a time keeps the computer usable
+_preview_slot = threading.Semaphore(1)
 
 
 def get_ffmpeg_path() -> str | None:
@@ -403,12 +432,20 @@ def _update(job: dict, **fields):
 
 
 def _purge_old_jobs():
+    """Drop finished jobs unused for JOB_TTL, and previews beyond the newest MAX_PREVIEWS."""
     now = time.time()
     with _jobs_lock:
-        old = [
-            jid for jid, j in _export_jobs.items()
-            if j.get("status") in ("done", "error") and now - j.get("created_at", now) > JOB_TTL
-        ]
+        idle = {
+            jid: now - j.get("touched", j.get("created_at", now))
+            for jid, j in _export_jobs.items()
+            if j.get("status") in ("done", "error", "ready") and j.get("crop_state") != "running"
+        }
+        old = {jid for jid, age in idle.items() if age > JOB_TTL}
+        previews = sorted(
+            (jid for jid in idle if _export_jobs[jid].get("kind") == "preview" and jid not in old),
+            key=lambda jid: idle[jid],
+        )
+        old.update(previews[MAX_PREVIEWS:])
         dirs = [_export_jobs.pop(jid).get("tmpdir") for jid in old]
     for d in dirs:
         if d:
@@ -434,7 +471,157 @@ def probe_video(ffmpeg_bin: str, path: str) -> tuple[int, int, float]:
     return int(size.group(1)), int(size.group(2)), duration
 
 
-def download_section(url: str, start: float, end: float, tmpdir: str, ffmpeg_bin: str) -> str:
+# yt-dlp cuts a section by letting ffmpeg stream the format from the cut point, and YouTube
+# throttles such long reads to about playback speed. Its DASH files start with an index
+# (sidx) of their fragments, so the fragments a clip needs can be fetched directly, in
+# parallel chunks at full speed; ffmpeg then cuts the local copy exactly.
+
+FETCH_CHUNK = 2 * 1024 * 1024
+
+
+def _mp4_boxes(data: bytes):
+    """(type, start, end) of the top-level MP4 boxes in data; the last may run past its end."""
+    pos = 0
+    while pos + 8 <= len(data):
+        size, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        if size == 1 and pos + 16 <= len(data):
+            size = struct.unpack(">Q", data[pos + 8:pos + 16])[0]
+        if size < 8:
+            return
+        yield kind.decode("latin-1"), pos, pos + size
+        pos += size
+
+
+def _parse_sidx(data: bytes, start: int, end: int) -> list[tuple[float, float, int, int]]:
+    """Fragments as (start s, end s, first byte, end byte) from the sidx box at data[start:end]."""
+    p = start + 8
+    version = data[p]
+    timescale = struct.unpack(">I", data[p + 8:p + 12])[0]
+    p += 12
+    if version == 0:
+        t, first = struct.unpack(">II", data[p:p + 8])
+        p += 8
+    else:
+        t, first = struct.unpack(">QQ", data[p:p + 16])
+        p += 16
+    count = struct.unpack(">H", data[p + 2:p + 4])[0]
+    p += 4
+    offset = end + first
+    frags = []
+    for _ in range(count):
+        ref, dur, _sap = struct.unpack(">III", data[p:p + 12])
+        p += 12
+        if ref >> 31:
+            raise ValueError("nested sidx")
+        size = ref & 0x7FFFFFFF
+        frags.append((t / timescale, (t + dur) / timescale, offset, offset + size))
+        t += dur
+        offset += size
+    return frags
+
+
+def _get_range(ydl, fmt: dict, first: int, last: int, exact: bool = True) -> bytes:
+    """Bytes first..last of a format, with a few retries."""
+    want = last - first + 1
+    headers = {**(fmt.get("http_headers") or {}), "Range": f"bytes={first}-{last}"}
+    for attempt in range(3):
+        try:
+            with ydl.urlopen(yt_dlp.networking.Request(fmt["url"], headers=headers)) as r:
+                if r.status != 206:
+                    raise ValueError(f"no range support (HTTP {r.status})")
+                data = r.read(want)
+            if exact and len(data) != want:
+                raise ValueError(f"short read: {len(data)} of {want} bytes")
+            return data
+        except ValueError:
+            raise
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(0.5 * (attempt + 1))
+    raise AssertionError("unreachable")
+
+
+def _fetch_fragments(ydl, fmt: dict, start: float, end: float, tmpdir: str) -> tuple[str, float]:
+    """Writes init + the fragments covering start..end to a local file; returns it and its start time."""
+    if fmt.get("protocol") not in ("http", "https") or fmt.get("ext") not in ("mp4", "m4a"):
+        raise ValueError(f"format {fmt.get('format_id')} is not a plain DASH MP4")
+    head = _get_range(ydl, fmt, 0, 128 * 1024 - 1, exact=False)
+    boxes: dict[str, tuple[int, int]] = {}
+    for kind, a, b in _mp4_boxes(head):
+        boxes.setdefault(kind, (a, b))
+        if kind in ("moof", "mdat"):
+            break
+    if "moov" not in boxes or "sidx" not in boxes or boxes["moov"][1] > boxes["sidx"][0]:
+        raise ValueError(f"no fragment index in format {fmt.get('format_id')}")
+    if boxes["sidx"][1] > len(head):
+        head = _get_range(ydl, fmt, 0, boxes["sidx"][1] - 1)
+    frags = [f for f in _parse_sidx(head, *boxes["sidx"]) if f[1] > start and f[0] < end]
+    if not frags:
+        raise ValueError("clip lies outside the indexed fragments")
+    if frags[-1][1] - frags[0][0] > end - start + 60:
+        raise ValueError("fragments too coarse to fetch just the clip")
+    first, stop = frags[0][2], frags[-1][3]
+    init = head[:boxes["moov"][1]]  # ftyp + moov: the codec setup
+    path = os.path.join(tmpdir, f"part_{fmt['format_id']}.{fmt['ext']}")
+    lock = threading.Lock()
+    with open(path, "wb") as f:
+        f.write(init)
+
+        def fetch(chunk: tuple[int, int]):
+            data = _get_range(ydl, fmt, *chunk)
+            with lock:  # chunks land in place as they arrive, so memory stays small
+                f.seek(len(init) + chunk[0] - first)
+                f.write(data)
+
+        chunks = [(p, min(p + FETCH_CHUNK, stop) - 1) for p in range(first, stop, FETCH_CHUNK)]
+        with ThreadPoolExecutor(6) as pool:
+            list(pool.map(fetch, chunks))
+    return path, frags[0][0]
+
+
+def _fast_section(ydl, info: dict, start: float, end: float, tmpdir: str, ffmpeg_bin: str, encode: list[str]) -> str | None:
+    """The section cut from directly fetched fragments, or None when the slow path is needed."""
+    try:
+        chosen = ydl.process_ie_result(info, download=False)
+        fmts = sorted(chosen.get("requested_formats") or [], key=lambda f: f.get("vcodec") == "none")
+        if len(fmts) != 2 or fmts[0].get("vcodec") == "none" or fmts[1].get("acodec") == "none":
+            return None
+        with ThreadPoolExecutor(2) as pool:
+            parts = list(pool.map(lambda f: _fetch_fragments(ydl, f, start, end, tmpdir), fmts))
+        out = os.path.join(tmpdir, "raw.mp4")
+        cmd = [ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-y"]
+        for path, t0 in parts:
+            # -ss counts from the local file's own start, which is the first fetched fragment.
+            cmd += ["-ss", f"{max(0.0, start - t0):.3f}", "-i", path]
+        cmd += ["-t", f"{end - start:.3f}", "-map", "0:v:0", "-map", "1:a:0", *encode, out]
+        res = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=max(120.0, (end - start) * 10))
+        if res.returncode != 0 or not os.path.isfile(out):
+            raise RuntimeError(res.stderr.strip()[-300:] or "ffmpeg failed")
+        for path, _ in parts:
+            os.remove(path)
+        return out
+    except Exception as e:
+        sys.stderr.write(f"[helper] unduhan cepat tidak bisa ({e}); pakai cara biasa\n")
+        for name in os.listdir(tmpdir):
+            if name.startswith(("raw.", "part_")):
+                try:
+                    os.remove(os.path.join(tmpdir, name))
+                except OSError:
+                    pass
+        return None
+
+
+def download_section(
+    url: str, start: float, end: float, tmpdir: str, ffmpeg_bin: str, height: int = 1080, preview: bool = False
+) -> str:
+    if preview:
+        # Only played in the browser: small, quick, and in a format every browser decodes.
+        encode = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p",
+                  "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]
+    else:
+        # Exact cut points need a re-encode; keep it fast and near-lossless.
+        encode = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "17", "-c:a", "aac", "-b:a", "192k"]
     opts = ydl_options()
     opts.pop("skip_download", None)
     opts.pop("extract_flat", None)
@@ -442,21 +629,32 @@ def download_section(url: str, start: float, end: float, tmpdir: str, ffmpeg_bin
         "outtmpl": os.path.join(tmpdir, "raw.%(ext)s"),
         # A 1080p source is plenty for a vertical clip, and H.264 decodes fastest.
         "format": "bv*+ba/b",
-        "format_sort": ["res:1080", "vcodec:h264", "acodec:m4a"],
+        "format_sort": [f"res:{height}", "vcodec:h264", "acodec:m4a"],
         "merge_output_format": "mp4",
         "download_ranges": yt_dlp.utils.download_range_func(None, [(start, end)]),
-        # Exact cut points need a re-encode; keep it fast and near-lossless.
         "force_keyframes_at_cuts": True,
-        "external_downloader_args": {
-            "ffmpeg_o": ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "17", "-c:a", "aac", "-b:a", "192k"],
-        },
+        "external_downloader_args": {"ffmpeg_o": encode},
         "ffmpeg_location": ffmpeg_bin,
         "noprogress": True,
         "socket_timeout": 30,
     })
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
+            info = recall_info(url)
+            cached = info is not None
+            if not cached:
+                info = ydl.extract_info(url, download=False)
+                remember_info(info, url)
+                info = copy.deepcopy(info)
+            fast = _fast_section(ydl, copy.deepcopy(info), start, end, tmpdir, ffmpeg_bin, encode)
+            if fast:
+                return fast
+            try:
+                ydl.process_ie_result(info, download=True)
+            except DownloadError:
+                if not cached:
+                    raise
+                ydl.download([url])  # the cached links went stale
     except DownloadError as e:
         raise UserError(friendly_error(e)) from e
     files = [f for f in os.listdir(tmpdir) if f.startswith("raw.") and not f.endswith((".part", ".ytdl"))]
@@ -1012,7 +1210,14 @@ def _run_export_job(job: dict, params: dict):
 
             crop_expr = None
             if layout == "crop":
-                if has_module("cv2"):
+                reused = _preview_crop(params.get("previewId"), url, start, end)
+                if reused:
+                    # Same path the preview showed, so the export frames exactly like it.
+                    keys = [(t, min(iw - crop_w, max(0.0, f * iw))) for t, f in reused["keys"]]
+                    if not reused["faces"]:
+                        notes.append("Tidak ada wajah terdeteksi, jadi dipakai potongan tengah.")
+                    crop_expr = crop_x_expression(keys)
+                elif has_module("cv2"):
                     _update(job, status="analyzing", progress=35, message="Mendeteksi wajah...")
                     samples, _ = analyze_faces(
                         raw, duration, lambda f: _update(job, progress=35 + round(20 * f))
@@ -1099,6 +1304,121 @@ def start_export(params: dict) -> str:
     return job_id
 
 
+# ------------------------------------------------------------ preview ---
+#
+# A light 480p copy of the clip that the web app plays and frames the way the export
+# will (layout, face-following crop, captions), so the result can be checked first.
+
+def _analyze_preview(job: dict, raw: str, iw: int, crop_w: int):
+    """The face-following path for the 9:16 crop, kept so the export can reuse it."""
+    try:
+        _update(job, crop_state="running")
+        samples, _ = analyze_faces(raw, job["duration"], lambda f: _update(job, crop_progress=round(100 * f)))
+        keys = plan_crop_path(samples, iw, crop_w)
+        _update(job, crop_state="done", crop_progress=100, crop={
+            "keys": [[round(t, 3), round(x / iw, 5)] for t, x in keys],  # x as a share of the width
+            "width": crop_w / iw,
+            "faces": any(s["faces"] for s in samples),
+        })
+    except Exception as e:  # the video itself is fine; the preview falls back to a centre crop
+        sys.stderr.write(f"[helper] preview face error: {e!r}\n")
+        _update(job, crop_state="error")
+
+
+def _run_preview_job(job: dict):
+    if not _preview_slot.acquire(blocking=False):
+        _update(job, message="Menunggu pratinjau lain selesai...")
+        _preview_slot.acquire()
+    try:
+        ffmpeg_bin = get_ffmpeg_path()
+        if not ffmpeg_bin:
+            raise UserError("FFmpeg belum terpasang. Mac: brew install ffmpeg. Windows: winget install ffmpeg.")
+        _update(job, status="downloading", progress=15, message=f"Mengunduh potongan pratinjau ({PREVIEW_HEIGHT}p)...")
+        raw = download_section(job["url"], job["start"], job["end"], job["tmpdir"], ffmpeg_bin,
+                               height=PREVIEW_HEIGHT, preview=True)
+        iw, ih, duration = probe_video(ffmpeg_bin, raw)
+        crop_w = round(ih * 9 / 16) // 2 * 2
+        crop_state = "none" if crop_w > iw else ("pending" if has_module("cv2") else "unavailable")
+        _update(job, status="ready", progress=100, message="Pratinjau siap.", file=raw, width=iw, height=ih,
+                duration=duration or job["end"] - job["start"], crop_state=crop_state)
+        if crop_state == "pending":
+            _analyze_preview(job, raw, iw, crop_w)
+    except UserError as e:
+        _update(job, status="error", error=str(e), message=f"Gagal: {e}")
+    except Exception as e:
+        sys.stderr.write(f"[helper] preview error: {e!r}\n")
+        _update(job, status="error", error=f"Terjadi kesalahan: {e}", message="Gagal.")
+    finally:
+        _preview_slot.release()
+
+
+def start_preview(params: dict) -> str:
+    """Id of a preview job for this clip; an existing one for the same clip is reused."""
+    url = clean_url(str(params.get("url", "")))
+    if not url or not is_youtube(url):
+        raise UserError("Link YouTube tidak valid.")
+    try:
+        start = round(max(0.0, float(params.get("start", 0))), 2)
+        end = round(float(params.get("end", 0)), 2)
+    except (TypeError, ValueError) as e:
+        raise UserError("Waktu klip tidak valid.") from e
+    if not (math.isfinite(start) and math.isfinite(end)) or end - start < 0.5:
+        raise UserError("Klip terlalu pendek untuk dipratinjau.")
+    if end - start > MAX_CLIP_SECONDS:
+        raise UserError("Klip lebih dari 10 menit. Pendekkan dulu sebelum dipratinjau.")
+    _purge_old_jobs()
+    with _jobs_lock:
+        for j in _export_jobs.values():
+            if (j.get("kind") == "preview" and j["status"] != "error"
+                    and (j["url"], j["start"], j["end"]) == (url, start, end)):
+                j["touched"] = time.time()
+                return j["id"]
+        job_id = uuid.uuid4().hex
+        job = {
+            "id": job_id,
+            "kind": "preview",
+            "status": "pending",
+            "progress": 5,
+            "message": "Menyiapkan pratinjau...",
+            "created_at": time.time(),
+            "tmpdir": tempfile.mkdtemp(prefix="autoclip_preview_"),
+            "url": url,
+            "start": start,
+            "end": end,
+        }
+        _export_jobs[job_id] = job
+    threading.Thread(target=_run_preview_job, args=(job,), daemon=True).start()
+    return job_id
+
+
+def preview_status(job: dict) -> dict:
+    return {
+        "ok": True,
+        "id": job["id"],
+        "status": job.get("status", "pending"),
+        "progress": job.get("progress", 0),
+        "message": job.get("message", ""),
+        "error": job.get("error"),
+        "width": job.get("width"),
+        "height": job.get("height"),
+        "duration": job.get("duration"),
+        "crop_state": job.get("crop_state"),
+        "crop_progress": job.get("crop_progress", 0),
+        "crop": job.get("crop"),
+    }
+
+
+def _preview_crop(preview_id, url: str, start: float, end: float) -> dict | None:
+    """The face path a preview already found for exactly this clip, if any."""
+    with _jobs_lock:
+        job = _export_jobs.get(str(preview_id or ""))
+    if not job or job.get("kind") != "preview" or job.get("crop_state") != "done":
+        return None
+    if job["url"] != url or abs(job["start"] - start) > 0.02 or abs(job["end"] - end) > 0.02:
+        return None
+    return job["crop"]
+
+
 def ensure_optional_packages():
     """Install face detection and caption drawing packages into the helper's own venv."""
     missing = [pkg for mod, pkg in OPTIONAL_PACKAGES if not has_module(mod)]
@@ -1159,6 +1479,13 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("[helper] " + (fmt % args) + "\n")
 
+    def log_request(self, code="-", size="-"):
+        # Progress polls and video range requests would flood the window; failures still show.
+        path = urlparse(self.path).path
+        if str(code) in ("200", "206") and (path.endswith("/status") or path == "/preview/video"):
+            return
+        super().log_request(code, size)
+
     @property
     def origin(self) -> str | None:
         return self.headers.get("Origin")
@@ -1217,6 +1544,50 @@ class Handler(BaseHTTPRequestHandler):
         with open(filepath, "rb") as f:
             shutil.copyfileobj(f, self.wfile)
 
+    def send_video(self, filepath: str):
+        """A video with HTTP range support; Safari will not play media served without it."""
+        try:
+            size = os.path.getsize(filepath)
+        except OSError:
+            return self.send_json(404, {"error": "file not found"})
+        start, end = 0, size - 1
+        m = re.fullmatch(r"bytes=(\d*)-(\d*)", (self.headers.get("Range") or "").strip())
+        partial = bool(m and (m.group(1) or m.group(2)))
+        if partial:
+            if m.group(1):
+                start = int(m.group(1))
+                if m.group(2):
+                    end = min(int(m.group(2)), size - 1)
+            else:  # "bytes=-N": the last N bytes
+                start = max(0, size - int(m.group(2)))
+            if start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Cache-Control", "no-cache")
+        self.cors()
+        self.end_headers()
+        try:
+            with open(filepath, "rb") as f:
+                f.seek(start)
+                remaining = end - start + 1
+                while remaining > 0:
+                    chunk = f.read(min(256 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass  # the player seeked elsewhere and dropped this request
+
     def reject_origin(self):
         sys.stderr.write(
             f"[helper] Ditolak: {self.origin}. Jalankan ulang dengan --allow-origin {self.origin}\n"
@@ -1255,7 +1626,7 @@ class Handler(BaseHTTPRequestHandler):
             job_id = (qs.get("jobId") or [""])[0]
             with _jobs_lock:
                 job = _export_jobs.get(job_id)
-            if not job:
+            if not job or job.get("kind") == "preview":
                 return self.send_json(404, {"error": "Pekerjaan ekspor tidak ditemukan."})
             return self.send_json(200, {
                 "ok": True,
@@ -1278,6 +1649,20 @@ class Handler(BaseHTTPRequestHandler):
             if job.get("status") != "done" or not job.get("output_file"):
                 return self.send_json(400, {"error": "Video belum selesai diproses."})
             return self.send_file_download(job["output_file"], job.get("filename", "clip.mp4"))
+
+        if path in ("/preview/status", "/preview/video"):
+            job_id = (parse_qs(parsed.query).get("id") or [""])[0]
+            with _jobs_lock:
+                job = _export_jobs.get(job_id)
+                if job and job.get("kind") == "preview":
+                    job["touched"] = time.time()
+            if not job or job.get("kind") != "preview":
+                return self.send_json(404, {"error": "Pratinjau tidak ditemukan. Buka pratinjau lagi."})
+            if path == "/preview/status":
+                return self.send_json(200, preview_status(job))
+            if job.get("status") != "ready":
+                return self.send_json(409, {"error": "Pratinjau belum siap."})
+            return self.send_video(job["file"])
 
         if CFG.app_url:
             return self.send_app_file(path)
@@ -1310,6 +1695,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/export":
             try:
                 return self.send_json(200, {"ok": True, "jobId": start_export(body)})
+            except UserError as e:
+                return self.send_json(400, {"error": str(e)})
+
+        if path == "/preview":
+            try:
+                return self.send_json(200, {"ok": True, "id": start_preview(body)})
             except UserError as e:
                 return self.send_json(400, {"error": str(e)})
 
