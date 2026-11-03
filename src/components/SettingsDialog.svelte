@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Icon from './ui/Icon.svelte';
+  import Switch from './ui/Switch.svelte';
   import { PROVIDERS } from '../lib/ai';
   import { DEFAULT_SETTINGS } from '../lib/storage';
   import type { ProviderId, Settings } from '../lib/types';
@@ -26,17 +28,17 @@
   }
 </script>
 
-<dialog bind:this={dlg} onclose={() => (open = false)}>
+<dialog bind:this={dlg} onclose={() => (open = false)} aria-labelledby="settings-title">
   <form method="dialog" class="body">
     <header>
-      <h2>Pengaturan</h2>
-      <button class="ghost" aria-label="Tutup">✕</button>
+      <h2 id="settings-title">Pengaturan</h2>
+      <button class="icon-btn ghost" aria-label="Tutup" title="Tutup"><Icon name="close" /></button>
     </header>
 
     <fieldset>
       <legend>AI pemilih klip</legend>
       <label>
-        Penyedia
+        <span class="label">Penyedia</span>
         <select bind:value={settings.provider}>
           {#each providerIds as id (id)}
             <option value={id}>{PROVIDERS[id].label}</option>
@@ -44,7 +46,7 @@
         </select>
       </label>
       <label>
-        API key {PROVIDERS[provider].label}
+        <span class="label">API key {PROVIDERS[provider].label}</span>
         <span class="row">
           <input
             type={showKey ? 'text' : 'password'}
@@ -53,12 +55,22 @@
             autocomplete="off"
             spellcheck="false"
           />
-          <button type="button" class="small" onclick={() => (showKey = !showKey)}>{showKey ? 'Sembunyikan' : 'Lihat'}</button>
+          <button
+            type="button"
+            class="icon-btn"
+            onclick={() => (showKey = !showKey)}
+            aria-label={showKey ? 'Sembunyikan API key' : 'Lihat API key'}
+            title={showKey ? 'Sembunyikan' : 'Lihat'}
+          >
+            <Icon name={showKey ? 'eye-off' : 'eye'} />
+          </button>
         </span>
-        <a href={PROVIDERS[provider].keyUrl} target="_blank" rel="noreferrer">Dapatkan API key ↗</a>
+        <a class="ext" href={PROVIDERS[provider].keyUrl} target="_blank" rel="noreferrer">
+          Dapatkan API key <Icon name="external" size={12} />
+        </a>
       </label>
       <label>
-        Model
+        <span class="label">Model</span>
         <input
           value={settings.models[provider] ?? ''}
           oninput={(e) => (settings.models[provider] = e.currentTarget.value)}
@@ -73,61 +85,61 @@
     <fieldset>
       <legend>Klip</legend>
       <div class="grid3">
-        <label>Durasi min (dtk) <input type="number" min="5" bind:value={settings.minSec} onchange={fixDurations} /></label>
-        <label>Durasi maks (dtk) <input type="number" min="10" bind:value={settings.maxSec} onchange={fixDurations} /></label>
-        <label>Jumlah klip maks <input type="number" min="1" max="30" bind:value={settings.maxClips} onchange={fixDurations} /></label>
+        <label><span class="label">Durasi min (dtk)</span> <input type="number" min="5" bind:value={settings.minSec} onchange={fixDurations} /></label>
+        <label><span class="label">Durasi maks (dtk)</span> <input type="number" min="10" bind:value={settings.maxSec} onchange={fixDurations} /></label>
+        <label><span class="label">Jumlah klip maks</span> <input type="number" min="1" max="30" bind:value={settings.maxClips} onchange={fixDurations} /></label>
       </div>
       <label>
-        Instruksi tambahan untuk AI (opsional)
+        <span class="label">Instruksi tambahan untuk AI (opsional)</span>
         <textarea rows="3" bind:value={settings.instructions} placeholder="Contoh: fokus ke momen lucu dan debat panas"></textarea>
       </label>
       <div class="grid3">
-        <label>Jeda sebelum kata pertama (dtk) <input type="number" min="0" max="1" step="0.05" bind:value={settings.padStart} /></label>
-        <label>Jeda setelah kata terakhir (dtk) <input type="number" min="0" max="1.5" step="0.05" bind:value={settings.padEnd} /></label>
+        <label><span class="label">Jeda sebelum kata pertama (dtk)</span> <input type="number" min="0" max="1" step="0.05" bind:value={settings.padStart} /></label>
+        <label><span class="label">Jeda setelah kata terakhir (dtk)</span> <input type="number" min="0" max="1.5" step="0.05" bind:value={settings.padEnd} /></label>
       </div>
     </fieldset>
 
     <fieldset>
-      <legend>Ekspor Video & Auto Caption</legend>
+      <legend>Ekspor video dan caption</legend>
       <div class="grid2">
         <label>
-          Rasio aspek default
+          <span class="label">Format default</span>
           <select bind:value={settings.aspectRatio}>
-            <option value="9:16_blur">9:16 Vertikal (Blur Background - Shorts/Reels/TikTok)</option>
-            <option value="9:16_crop">9:16 Vertikal (Ikuti Wajah)</option>
-            <option value="16:9">16:9 Horizontal (Asli)</option>
+            <option value="9:16_blur">Vertikal, latar blur</option>
+            <option value="9:16_crop">Vertikal, ikuti wajah</option>
+            <option value="9:16_gaming">Vertikal, mode gamer</option>
+            <option value="16:9">Horizontal, asli</option>
           </select>
         </label>
         <label>
-          Gaya caption default
+          <span class="label">Gaya caption default</span>
           <select bind:value={settings.captionStyle}>
-            <option value="viral">🔥 Viral Highlight (Karaoke)</option>
-            <option value="box">⬛ Modern Box</option>
-            <option value="neon">✨ Neon Pop</option>
-            <option value="classic">📄 Klasik Subtitle</option>
+            <option value="viral">Viral (kata disorot)</option>
+            <option value="box">Kotak</option>
+            <option value="neon">Neon</option>
+            <option value="classic">Klasik</option>
           </select>
         </label>
       </div>
       <div class="grid2">
         <label>
-          Posisi caption
+          <span class="label">Posisi caption</span>
           <select bind:value={settings.captionPosition}>
-            <option value="bottom">Bawah (Standar)</option>
-            <option value="center">Tengah (Podcast)</option>
+            <option value="bottom">Bawah</option>
+            <option value="center">Tengah</option>
             <option value="top">Atas</option>
           </select>
         </label>
-        <label class="check-label">
-          <input type="checkbox" bind:checked={settings.captionUppercase} />
-          <span>Format HURUF BESAR (ALL CAPS)</span>
-        </label>
+        <div class="switch-cell">
+          <Switch bind:checked={settings.captionUppercase}>Huruf besar semua</Switch>
+        </div>
       </div>
     </fieldset>
 
     <fieldset>
       <legend>Helper</legend>
       <label>
-        Alamat helper
+        <span class="label">Alamat helper</span>
         <input bind:value={settings.helperUrl} spellcheck="false" />
       </label>
     </fieldset>
@@ -143,18 +155,20 @@
     width: min(620px, calc(100vw - 32px));
     max-height: calc(100vh - 48px);
     padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 14px;
+    border: 0;
+    border-radius: var(--radius-xl);
     background: var(--panel);
     color: var(--text);
+    box-shadow: var(--shadow-float);
   }
   dialog::backdrop {
     background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(3px);
   }
   .body {
     display: grid;
-    gap: 14px;
-    padding: 18px 20px;
+    gap: 6px;
+    padding: 16px 20px 18px;
   }
   header,
   footer {
@@ -162,35 +176,38 @@
     align-items: center;
     justify-content: space-between;
   }
+  header {
+    margin: 0 -4px 4px 0;
+  }
   footer {
     justify-content: flex-end;
+    padding-top: 10px;
   }
   h2 {
     margin: 0;
-    font-size: 18px;
+    font-size: 16px;
+    font-weight: 600;
   }
   fieldset {
     display: grid;
-    gap: 10px;
+    gap: 12px;
     margin: 0;
-    padding: 12px 14px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    padding: 16px 0;
+    border: 0;
+    border-top: 1px solid var(--border);
   }
   legend {
-    padding: 0 6px;
-    font-weight: 700;
+    float: left;
+    width: 100%;
+    margin: 0 0 2px;
+    padding: 0;
+    font-weight: 600;
     font-size: 13px;
   }
   label {
     display: grid;
-    gap: 4px;
+    gap: 5px;
     font-size: 13px;
-    color: var(--muted);
-  }
-  label a {
-    color: var(--accent-2);
-    font-size: 12px;
   }
   .row {
     display: flex;
@@ -198,25 +215,31 @@
   }
   .row input {
     flex: 1;
+    min-width: 0;
+  }
+  .ext {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    width: fit-content;
+    font-size: 12px;
   }
   .grid2 {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 10px;
+    gap: 12px;
     align-items: end;
   }
-  .check-label {
+  .switch-cell {
     display: flex;
-    flex-direction: row;
     align-items: center;
-    gap: 8px;
-    cursor: pointer;
-    margin-bottom: 6px;
+    min-height: 34px;
   }
   .grid3 {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 10px;
+    gap: 12px;
+    align-items: end;
   }
   .hint {
     margin: 0;

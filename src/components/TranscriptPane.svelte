@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './ui/Icon.svelte';
   import { onMount, tick } from 'svelte';
   import type { Unit, Word } from '../lib/types';
   import { fmtTime, unitIndexOfWord } from '../lib/transcript';
@@ -238,7 +239,7 @@
 </script>
 
 <div class="pane" class:dragging={drag} bind:this={box}>
-  <button class="more" onclick={() => expand(-1)}>↑ Tampilkan 30 detik sebelumnya</button>
+  <button class="more" onclick={() => expand(-1)}><Icon name="arrow-up" size={14} /> Tampilkan 30 detik sebelumnya</button>
 
   {#each visUnits as u (u.id)}
     <div class="unit" class:inside={u.w0 >= w0 && u.w1 <= w1} class:partial={u.w1 >= w0 && u.w0 <= w1 && !(u.w0 >= w0 && u.w1 <= w1)}>
@@ -254,13 +255,11 @@
     </div>
   {/each}
 
-  <button class="more" onclick={() => expand(1)}>↓ Tampilkan 30 detik sesudahnya</button>
+  <button class="more" onclick={() => expand(1)}><Icon name="arrow-down" size={14} /> Tampilkan 30 detik sesudahnya</button>
 
   {#if playing && followPaused}
     <button class="follow-chip" onclick={resumeFollow}>
-      <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"
-        ><path d="M10 3v12m0 0-5-5m5 5 5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg
-      >
+      <Icon name="arrow-down" size={14} />
       Ikuti pemutaran
     </button>
   {/if}
@@ -270,11 +269,11 @@
     {@const u = units[unitIndexOfWord(units, wi)]}
     <div class="menu" style:left="{menu.x}px" style:top="{menu.y}px" style:width="{MENU_W}px">
       <div class="menu-title">“{words[wi].t}” · {fmtTime(words[wi].s, true)}</div>
-      <button onclick={() => pick(() => onstart(Math.min(wi, w1), false))} disabled={wi > w1}>⟦ Mulai dari kata ini</button>
-      <button onclick={() => pick(() => onend(Math.max(wi, w0), false))} disabled={wi < w0}>Akhiri di kata ini ⟧</button>
-      <button onclick={() => pick(() => onstart(Math.min(u.w0, w1), false))} disabled={u.w0 > w1}>⟦ Mulai dari awal kalimat ini</button>
-      <button onclick={() => pick(() => onend(Math.max(u.w1, w0), false))} disabled={u.w1 < w0}>Akhiri di akhir kalimat ini ⟧</button>
-      <button onclick={() => pick(() => onplay(wi))}>▶ Putar dari sini</button>
+      <button onclick={() => pick(() => onstart(Math.min(wi, w1), false))} disabled={wi > w1}>Mulai dari kata ini</button>
+      <button onclick={() => pick(() => onend(Math.max(wi, w0), false))} disabled={wi < w0}>Akhiri di kata ini</button>
+      <button onclick={() => pick(() => onstart(Math.min(u.w0, w1), false))} disabled={u.w0 > w1}>Mulai dari awal kalimat ini</button>
+      <button onclick={() => pick(() => onend(Math.max(u.w1, w0), false))} disabled={u.w1 < w0}>Akhiri di akhir kalimat ini</button>
+      <button onclick={() => pick(() => onplay(wi))}><Icon name="play" size={14} /> Putar dari sini</button>
     </div>
   {/if}
 </div>
@@ -304,17 +303,17 @@
     padding: 8px 14px;
     min-height: 36px;
     border-radius: 999px;
-    border: 1px solid rgba(77, 171, 255, 0.5);
-    background: #1b2a40;
-    color: #cfe6ff;
+    border: 0;
+    background: var(--accent);
+    color: #fff;
     font-size: 13px;
     font-weight: 600;
     line-height: 1;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--shadow-satellite);
     animation: chip-in 180ms ease-out;
   }
   .follow-chip:hover {
-    background: #22364f;
+    background: var(--accent-hover);
   }
   @keyframes chip-in {
     from {
@@ -328,14 +327,20 @@
     }
   }
   .more {
-    display: block;
+    display: flex;
+    justify-content: center;
     width: 100%;
     margin: 4px 0;
     padding: 4px;
     font-size: 12px;
+    font-weight: 400;
     color: var(--muted);
     background: none;
-    border: 1px dashed var(--border);
+    border: 1px dashed var(--border-strong);
+  }
+  .more:hover:not(:disabled) {
+    background: var(--ink-1);
+    color: var(--text);
   }
   .unit {
     display: grid;
@@ -347,10 +352,10 @@
   }
   .unit.inside {
     border-left-color: var(--accent);
-    background: rgba(255, 77, 109, 0.06);
+    background: rgba(59, 130, 246, 0.07);
   }
   .unit.partial {
-    border-left-color: rgba(255, 77, 109, 0.45);
+    border-left-color: rgba(59, 130, 246, 0.45);
   }
   .ts {
     align-self: start;
@@ -371,7 +376,7 @@
     margin: 0;
   }
   .w {
-    color: #6b7286;
+    color: var(--faint);
     cursor: pointer;
     border-radius: 3px;
     padding: 1px 0;
@@ -383,7 +388,7 @@
     color: var(--text);
   }
   .w.cur {
-    background: rgba(77, 171, 255, 0.35);
+    background: rgba(59, 130, 246, 0.45);
     color: #fff;
   }
   .mark {
@@ -413,10 +418,9 @@
     z-index: 30;
     display: grid;
     padding: 6px;
-    background: #23283a;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    background: var(--raised);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-satellite);
     line-height: 1.3;
   }
   .menu-title {
@@ -429,14 +433,15 @@
   }
   .menu button {
     text-align: left;
-    padding: 7px 8px;
+    padding: 6px 8px;
     background: none;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     font-size: 13px;
+    font-weight: 400;
   }
   .menu button:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--ink-3);
   }
   .menu button:disabled {
     opacity: 0.35;

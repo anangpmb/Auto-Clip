@@ -1,4 +1,5 @@
 import type { CaptionCue } from './captions';
+import type { Box } from './preview';
 import type { Track, VideoInfo, Word, WordTiming } from './types';
 
 export interface HelperHealth {
@@ -21,6 +22,8 @@ export const EXPORT_HELPER_VERSION = '0.3.0';
 export const PREVIEW_HELPER_VERSION = '0.4.0';
 /** Oldest helper that can preview and export a compilation of several scenes. */
 export const COMPILATION_HELPER_VERSION = '0.5.0';
+/** Oldest helper with gamer mode and the zip of a bulk export. */
+export const GAMING_HELPER_VERSION = '0.6.0';
 
 /** True when version a is older than b (dotted numbers). */
 export function versionBefore(a: string | undefined, b: string): boolean {
@@ -56,13 +59,15 @@ export interface ExportParams {
   end?: number;
   /** Scenes joined in this order into one video (helper 0.5.0+). */
   segments?: Span[];
-  aspectRatio: '16:9' | '9:16_blur' | '9:16_crop';
+  aspectRatio: '16:9' | '9:16_blur' | '9:16_crop' | '9:16_gaming';
   captionStyle: 'viral' | 'box' | 'classic' | 'neon' | 'none';
   captionPosition?: 'bottom' | 'center' | 'top';
   /** Caption cues timed from the start of the final video; the helper draws them. */
   cues?: CaptionCue[];
   /** Preview of this clip; its face path is reused so the export frames like the preview. */
   previewId?: string;
+  /** Gamer mode: the gameplay and webcam areas; a null area is found automatically / centred. */
+  gaming?: { face: Box | null; game: Box | null; faceTop: boolean };
 }
 
 /** Face-following path for the 9:16 crop: [seconds from clip start, left edge as a share of the width]. */
@@ -87,6 +92,8 @@ export interface PreviewStatus {
   crop_state?: 'pending' | 'running' | 'done' | 'none' | 'unavailable' | 'error' | null;
   crop_progress?: number;
   crop?: CropPath | null;
+  /** Where the webcam is (gamer mode), found in the same face scan, and how steadily it was seen. */
+  facecam?: { box: Box; support: number } | null;
 }
 
 export interface ExportStatus {
@@ -213,6 +220,11 @@ export async function checkPreviewStatus(helperUrl: string, id: string): Promise
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Pratinjau tidak ditemukan.');
   return data as PreviewStatus;
+}
+
+/** One .zip of finished exports, in this order. */
+export function exportZipUrl(helperUrl: string, jobIds: string[], name: string): string {
+  return `${base(helperUrl)}/export/zip?jobs=${jobIds.map(encodeURIComponent).join(',')}&name=${encodeURIComponent(name)}`;
 }
 
 export function previewVideoUrl(helperUrl: string, id: string): string {

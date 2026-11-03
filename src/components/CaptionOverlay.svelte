@@ -23,6 +23,8 @@
      */
     exact?: boolean;
     vertical?: boolean;
+    /** Exact mode: keep the caption inside this band of the frame (shares of its height). */
+    area?: { top: number; height: number } | null;
   }
 
   let {
@@ -39,6 +41,7 @@
     uppercase = true,
     exact = false,
     vertical = true,
+    area = null,
   }: Props = $props();
 
   const cues = $derived(
@@ -59,7 +62,15 @@
 </script>
 
 {#if enabled && activeCue}
-  <div class="overlay pos-{position} style-{style}" class:exact class:v={vertical} class:h={!vertical}>
+  <div
+    class="overlay pos-{position} style-{style}"
+    class:exact
+    class:v={vertical}
+    class:h={!vertical}
+    class:area={exact && area}
+    style:--a-top={area ? `${area.top * 100}cqh` : undefined}
+    style:--a-h={area ? `${area.height * 100}cqh` : undefined}
+  >
     <div class="caption-box">
       {#each activeCue.words as w, i}
         <span class="word" class:active={i === activeWord}>{w.text}</span>{' '}
@@ -224,6 +235,18 @@
   }
   .overlay.exact.h.pos-top {
     padding-top: 8cqh;
+  }
+  /* Gamer mode: over the gameplay, 5% of the frame from its edges (the helper's area margin). */
+  .overlay.exact.area {
+    inset: auto 0;
+    top: var(--a-top);
+    height: var(--a-h);
+  }
+  .overlay.exact.area.pos-bottom {
+    padding-bottom: 5cqh;
+  }
+  .overlay.exact.area.pos-top {
+    padding-top: 5cqh;
   }
   .overlay.exact .caption-box {
     --stroke: #000;

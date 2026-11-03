@@ -33,13 +33,14 @@ import time
 import urllib.request
 import uuid
 import webbrowser
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 DEFAULT_PORT = 8765
 DEV_ORIGINS = {
     "http://localhost:5173",
@@ -391,7 +392,12 @@ DATA_DIR = os.path.join(os.path.expanduser("~"), ".autoclip")
 YUNET_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
 YUNET_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
 OPTIONAL_PACKAGES = (("cv2", "opencv-python-headless"), ("PIL", "pillow"))
-ASPECTS = ("16:9", "9:16_blur", "9:16_crop")
+ASPECTS = ("16:9", "9:16_blur", "9:16_crop", "9:16_gaming")
+# Gamer mode: gameplay over the top two thirds of the 1080x1920 frame, the webcam in the last third.
+GAME_SLOT = (1080, 1280)
+FACE_SLOT = (1080, 640)
+BIG_FACE = 0.03  # share of the frame width: smaller faces are background, except a webcam's
+WEBCAM_FACE = 0.012
 CAPTION_STYLES = ("viral", "box", "classic", "neon", "none")
 POSITIONS = ("bottom", "center", "top")
 MAX_CLIP_SECONDS = 10 * 60  # also the limit for a whole compilation
@@ -741,8 +747,12 @@ class FaceDetector:
         return [(float(x), float(y), float(fw), float(fh), 1.0) for x, y, fw, fh in found]
 
 
-def analyze_faces(path: str, duration: float, on_progress) -> tuple[list[dict], int]:
-    """Faces and scene cuts sampled every SAMPLE_STEP seconds, plus the frame width."""
+def analyze_faces(path: str, duration: float, on_progress, min_face: float = BIG_FACE) -> tuple[list[dict], int]:
+    """Faces and scene cuts sampled every SAMPLE_STEP seconds, plus the frame width.
+
+    min_face is the smallest face kept, as a share of the width; a webcam in the corner
+    of a game stream needs WEBCAM_FACE.
+    """
     import cv2
 
     detector = FaceDetector()
@@ -781,7 +791,7 @@ def analyze_faces(path: str, duration: float, on_progress) -> tuple[list[dict], 
                 faces = [
                     (x / scale, y / scale, w / scale, h / scale, c)
                     for x, y, w, h, c in detector.detect(small)
-                    if w / scale >= 0.03 * iw  # ignore tiny faces in the background
+                    if w / scale >= min_face * iw  # ignore tiny faces in the background
                 ]
                 t = idx / fps
                 samples.append({"t": t, "faces": faces, "cut": cut})
@@ -865,11 +875,17 @@ def _simplify(points: list[tuple[float, float]], tol: float) -> list[tuple[float
     return _simplify(points[: index + 1], tol)[:-1] + _simplify(points[index:], tol)
 
 
+def big_faces(samples: list[dict], iw: int) -> list[dict]:
+    """The samples with only the faces big enough to steer the camera."""
+    return [dict(s, faces=[f for f in s["faces"] if f[2] >= BIG_FACE * iw]) for s in samples]
+
+
 def plan_crop_path(samples: list[dict], iw: int, crop_w: int) -> list[tuple[float, float]]:
     """Keyframes (t, x) for the left edge of a crop window that follows the subject."""
     max_x = max(0.0, iw - crop_w)
     if not samples:
         return [(0.0, max_x / 2)]
+    samples = big_faces(samples, iw)
     subjects = _subject_centers(samples, crop_w)
 
     # Split into shots; within a shot fill gaps with the nearest known subject.
@@ -924,6 +940,67 @@ def plan_crop_path(samples: list[dict], iw: int, crop_w: int) -> list[tuple[floa
     if keys[0][0] > 0:
         keys.insert(0, (0.0, keys[0][1]))
     return keys
+
+
+def plan_facecam(samples: list[dict], iw: int, ih: int) -> dict | None:
+    """Where the webcam is in a game stream: the face that stays in one place the longest.
+
+    Faces in the game come and go and move; the streamer's sits in its corner for most of
+    the clip. Returns the box to show in the camera slot (head and shoulders, as shares of
+    the frame) and how often that face was seen, or None when there is no face at all.
+    """
+    faces = [(x + w / 2, y + h / 2, w, h, i) for i, s in enumerate(samples) for x, y, w, h, _ in s["faces"]]
+    if not faces:
+        return None
+    probe = faces[:: max(1, len(faces) // 400)]  # enough candidates to find the cluster quickly
+
+    def near(f, g):
+        # A streamer moves inside the webcam frame, about a face width either way.
+        return abs(g[0] - f[0]) < f[2] and abs(g[1] - f[1]) < f[3] and 0.5 < g[3] / f[3] < 2
+
+    best = max(probe, key=lambda f: sum(1 for g in faces if near(f, g)))
+    cluster = [g for g in faces if near(best, g)]
+
+    def median(k):
+        vals = sorted(g[k] for g in cluster)
+        return vals[len(vals) // 2]
+
+    cx, cy, h = median(0), median(1), median(3)
+    bh = min(ih, 2.2 * h)  # the face and some shoulders, still inside a typical webcam frame
+    bw = bh * FACE_SLOT[0] / FACE_SLOT[1]
+    top = cy + 0.15 * h - bh / 2  # a little lower than the face's centre
+    return {
+        "box": [round(v, 4) for v in ((cx - bw / 2) / iw, top / ih, bw / iw, bh / ih)],
+        "support": round(len({g[4] for g in cluster}) / len(samples), 2),
+    }
+
+
+def fit_box(box, iw: int, ih: int, aspect: float) -> tuple[int, int, int, int]:
+    """A box (shares of the frame) made exactly `aspect` wide in pixels, around its centre and
+    inside the frame, with even sizes for the encoder. The web app does the same (fitBox)."""
+    x, y, w, h = box
+    cx, cy = (x + w / 2) * iw, (y + h / 2) * ih
+    ph = max(32.0, h * ih)
+    pw = ph * aspect
+    if pw > iw:
+        pw, ph = iw, iw / aspect
+    if ph > ih:
+        pw, ph = ih * aspect, ih
+    pw, ph = int(pw) // 2 * 2, int(ph) // 2 * 2
+    px = round(min(max(cx - pw / 2, 0), iw - pw))
+    py = round(min(max(cy - ph / 2, 0), ih - ph))
+    return px, py, pw, ph
+
+
+def clean_box(raw) -> list[float] | None:
+    """A box from the web app ([x, y, w, h] as shares of the frame), or None."""
+    try:
+        x, y, w, h = (float(v) for v in raw)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in (x, y, w, h)) or w < 0.02 or h < 0.02:
+        return None
+    return [min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0), min(w, 1.0), min(h, 1.0)]
 
 
 def crop_x_expression(keys: list[tuple[float, float]]) -> str:
@@ -981,7 +1058,7 @@ STYLE_LOOK = {
 class CaptionRenderer:
     """Draws caption states into same-sized transparent PNG bands for ffmpeg's overlay."""
 
-    def __init__(self, style: str, position: str, out_w: int, out_h: int):
+    def __init__(self, style: str, position: str, out_w: int, out_h: int, area: tuple[int, int] | None = None):
         self.look = STYLE_LOOK[style]
         self.out_w, self.out_h = out_w, out_h
         vertical = out_h > out_w
@@ -994,6 +1071,10 @@ class CaptionRenderer:
         self.pad = round(self.size * 0.6)
         self.position = position
         self.margin = round(out_h * (0.14 if vertical else 0.08))
+        # In gamer mode captions stay over the gameplay, close to its edges, never on the face.
+        self.area = area or (0, out_h)
+        if area:
+            self.margin = round(out_h * 0.05)
 
     def _lines(self, words: list[str]) -> list[list[int]]:
         lines: list[list[int]] = []
@@ -1015,12 +1096,13 @@ class CaptionRenderer:
         """Top y and height of one band that fits every caption."""
         tallest = max((len(self._lines(ws)) for ws in all_words), default=1) * self.line_h
         height = tallest + 2 * self.pad
+        a_top, a_h = self.area
         if self.position == "top":
-            top = self.margin - self.pad
+            top = a_top + self.margin - self.pad
         elif self.position == "center":
-            top = (self.out_h - height) // 2
+            top = a_top + (a_h - height) // 2
         else:
-            top = self.out_h - self.margin + self.pad - height
+            top = a_top + a_h - self.margin + self.pad - height
         top = max(0, min(self.out_h - height, top))
         return top - top % 2, height + height % 2
 
@@ -1127,11 +1209,12 @@ def caption_states(cues: list[dict], highlight: bool) -> list[tuple[float, float
     return states
 
 
-def render_caption_track(cues: list[dict], style: str, position: str, out_w: int, out_h: int, tmpdir: str):
+def render_caption_track(cues: list[dict], style: str, position: str, out_w: int, out_h: int, tmpdir: str,
+                         area: tuple[int, int] | None = None):
     """PNG bands plus an ffconcat playlist that shows each one at the right time."""
     from PIL import Image
 
-    renderer = CaptionRenderer(style, position, out_w, out_h)
+    renderer = CaptionRenderer(style, position, out_w, out_h, area)
     states = caption_states(cues, highlight=style != "classic")
     if not states:
         return None
@@ -1212,8 +1295,11 @@ def segment_frames(durations: list[float], rate: str) -> list[int]:
 
 
 def layout_graph(src: str, out: str, layout: str, ih: int, crop_w: int, crop_expr: str | None,
-                 out_w: int, out_h: int, tag: str = "") -> str:
-    """Filters that place one video in the output frame the way the chosen format does."""
+                 out_w: int, out_h: int, tag: str = "", gaming=None) -> str:
+    """Filters that place one video in the output frame the way the chosen format does.
+
+    gaming: (gameplay box, camera box, camera on top) in pixels, for the gamer layout.
+    """
     if layout == "crop":
         return f"{src}crop=w={crop_w}:h={ih}:x='{crop_expr}':y=0,scale={out_w}:{out_h},setsar=1{out}"
     if layout == "blur":
@@ -1230,6 +1316,12 @@ def layout_graph(src: str, out: str, layout: str, ih: int, crop_w: int, crop_exp
             f"{src}scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
             f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2,setsar=1{out}"
         )
+    if layout == "gaming":
+        (gx, gy, gw, gh), (fx, fy, fw, fh), face_top = gaming
+        game = f"[gs{tag}]crop={gw}:{gh}:{gx}:{gy},scale={GAME_SLOT[0]}:{GAME_SLOT[1]},setsar=1[gt{tag}]"
+        face = f"[fs{tag}]crop={fw}:{fh}:{fx}:{fy},scale={FACE_SLOT[0]}:{FACE_SLOT[1]},setsar=1[ft{tag}]"
+        order = f"[ft{tag}][gt{tag}]" if face_top else f"[gt{tag}][ft{tag}]"
+        return f"{src}split=2[gs{tag}][fs{tag}];{game};{face};{order}vstack=inputs=2,setsar=1{out}"
     return f"{src}scale={out_w}:{out_h},setsar=1{out}"  # "same": the scenes as they are
 
 
@@ -1346,7 +1438,7 @@ def _run_export_job(job: dict, params: dict):
 
             vertical = aspect != "16:9"
             out_w, out_h = (1080, 1920) if vertical else (1920, 1080)
-            layout = {"16:9": "fit", "9:16_blur": "blur", "9:16_crop": "crop"}[aspect]
+            layout = {"16:9": "fit", "9:16_blur": "blur", "9:16_crop": "crop", "9:16_gaming": "gaming"}[aspect]
             iw, ih = metas[0]["width"], metas[0]["height"]
             if layout == "crop" and round(ih * 9 / 16) // 2 * 2 > iw:
                 layout = "blur"  # the source is already narrower than 9:16
@@ -1385,24 +1477,44 @@ def _run_export_job(job: dict, params: dict):
                 notes.append(f"Di adegan {', '.join(map(str, faceless))} tidak ada wajah terdeteksi, "
                              "jadi di sana dipakai potongan tengah.")
 
+            # Gamer mode: one gameplay box and one webcam box for every scene of the video.
+            boxes: list = [None] * n
+            area = None
+            if layout == "gaming":
+                g = params.get("gaming") if isinstance(params.get("gaming"), dict) else {}
+                face_top = bool(g.get("faceTop"))
+                game_box = clean_box(g.get("game")) or [0.0, 0.0, 1.0, 1.0]
+                face_box = clean_box(g.get("face")) or _find_facecam(job, url, segs, raws, metas)
+                if face_box is None:
+                    face_box = [0.0, 0.0, 1.0, 1.0]
+                    notes.append("Kamera wajah tidak terdeteksi, jadi bagian kamera memakai seluruh layar. "
+                                 "Atur area kamera di pratinjau.")
+                boxes = [
+                    (fit_box(game_box, m["width"], m["height"], GAME_SLOT[0] / GAME_SLOT[1]),
+                     fit_box(face_box, m["width"], m["height"], FACE_SLOT[0] / FACE_SLOT[1]), face_top)
+                    for m in metas
+                ]
+                area = (FACE_SLOT[1], GAME_SLOT[1]) if face_top else (0, GAME_SLOT[1])
+
             captions = None
             if cues:
                 if has_module("PIL"):
                     _update(job, status="rendering", progress=56, message="Membuat caption...")
-                    captions = render_caption_track(cues, style, position, out_w, out_h, tmpdir)
+                    captions = render_caption_track(cues, style, position, out_w, out_h, tmpdir, area)
                 else:
                     notes.append("Caption dilewati karena Pillow belum terpasang.")
 
             if many:
                 scenes = [
-                    layout_graph(f"[s{i}]", f"[l{i}]", layout, m["height"], crop_ws[i], exprs[i], out_w, out_h, tag=str(i))
+                    layout_graph(f"[s{i}]", f"[l{i}]", layout, m["height"], crop_ws[i], exprs[i], out_w, out_h,
+                                 tag=str(i), gaming=boxes[i])
                     for i, m in enumerate(metas)
                 ]
                 graph = join_graph(scenes, [m["audio"] for m in metas], [e - s for s, e in segs],
                                    frame_rate(metas[0]["fps"]))
                 sound = ["-map", "[aout]"]
             else:
-                graph = layout_graph("[0:v]", "[base]", layout, ih, crop_ws[0], exprs[0], out_w, out_h)
+                graph = layout_graph("[0:v]", "[base]", layout, ih, crop_ws[0], exprs[0], out_w, out_h, gaming=boxes[0])
                 sound = ["-map", "0:a?"]
             cmd = [ffmpeg_bin, "-hide_banner", "-y"]
             for raw in raws:
@@ -1432,6 +1544,21 @@ def _run_export_job(job: dict, params: dict):
     except Exception as e:  # keep the helper alive and report something useful
         sys.stderr.write(f"[helper] export error: {e!r}\n")
         _update(job, status="error", error=f"Terjadi kesalahan: {e}", notes=notes, message="Gagal.")
+
+
+def zip_exports(jobs: list[dict], folder: str) -> str:
+    """One .zip of finished exports, in the given order. MP4 is already compressed: stored."""
+    path = os.path.join(folder, "klip.zip")
+    used: set[str] = set()
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED, allowZip64=True) as z:
+        for j in jobs:
+            stem, ext = os.path.splitext(j.get("filename") or "klip.mp4")
+            name, n = f"{stem}{ext}", 2
+            while name.lower() in used:
+                name, n = f"{stem} ({n}){ext}", n + 1
+            used.add(name.lower())
+            z.write(j["output_file"], name)
+    return path
 
 
 def start_export(params: dict) -> str:
@@ -1466,12 +1593,13 @@ def _analyze_preview(job: dict, raw: str, iw: int, crop_w: int):
     """The face-following path for the 9:16 crop, kept so the export can reuse it."""
     try:
         _update(job, crop_state="running")
-        samples, _ = analyze_faces(raw, job["duration"], lambda f: _update(job, crop_progress=round(100 * f)))
+        samples, _ = analyze_faces(raw, job["duration"], lambda f: _update(job, crop_progress=round(100 * f)),
+                                   min_face=WEBCAM_FACE)
         keys = plan_crop_path(samples, iw, crop_w)
-        _update(job, crop_state="done", crop_progress=100, crop={
+        _update(job, crop_state="done", crop_progress=100, facecam=plan_facecam(samples, iw, job["height"]), crop={
             "keys": [[round(t, 3), round(x / iw, 5)] for t, x in keys],  # x as a share of the width
             "width": crop_w / iw,
-            "faces": any(s["faces"] for s in samples),
+            "faces": any(s["faces"] for s in big_faces(samples, iw)),
         })
     except Exception as e:  # the video itself is fine; the preview falls back to a centre crop
         sys.stderr.write(f"[helper] preview face error: {e!r}\n")
@@ -1565,7 +1693,9 @@ def _run_compilation_preview(job: dict):
             _update(job, crop_state="running" if "running" in states else "pending", crop_progress=progress)
             time.sleep(0.25)
         crops = [p.get("crop") if p.get("crop_state") == "done" else None for p in parts]
-        _update(job, crop_state="done", crop_progress=100, crop={
+        cams = [p["facecam"] for p in parts if p.get("facecam")]
+        _update(job, crop_state="done", crop_progress=100,
+                facecam=max(cams, key=lambda c: c["support"]) if cams else None, crop={
             "keys": combine_crops(crops, durations, round((1 - crop_w / iw) / 2, 5)),
             "width": crop_w / iw,
             "faces": any(c and c["faces"] for c in crops),
@@ -1652,11 +1782,12 @@ def preview_status(job: dict) -> dict:
         "crop_state": job.get("crop_state"),
         "crop_progress": job.get("crop_progress", 0),
         "crop": job.get("crop"),
+        "facecam": job.get("facecam"),
     }
 
 
-def _preview_crop(preview_id, url: str, start: float, end: float) -> dict | None:
-    """The face path a preview already found for exactly this scene, if any (that preview first)."""
+def _preview_scan(preview_id, url: str, start: float, end: float) -> dict | None:
+    """The preview whose face scan of exactly this scene is done, if any (that preview first)."""
     def fits(j):
         return (j is not None and j.get("kind") == "preview" and "parts" not in j and j.get("crop_state") == "done"
                 and j["url"] == url and abs(j["start"] - start) <= 0.02 and abs(j["end"] - end) <= 0.02)
@@ -1665,7 +1796,31 @@ def _preview_crop(preview_id, url: str, start: float, end: float) -> dict | None
         job = _export_jobs.get(str(preview_id or ""))
         if not fits(job):
             job = next((j for j in _export_jobs.values() if fits(j)), None)
-        return job["crop"] if job else None
+        return job
+
+
+def _preview_crop(preview_id, url: str, start: float, end: float) -> dict | None:
+    """The face path a preview already found for exactly this scene, if any."""
+    job = _preview_scan(preview_id, url, start, end)
+    return job["crop"] if job else None
+
+
+def _find_facecam(job: dict, url: str, segs, raws, metas) -> list[float] | None:
+    """The webcam box for an export that was not given one: from the scenes' previews when
+    they scanned for faces, else by scanning the downloaded scenes. The surest one wins."""
+    found = []
+    for (start, end), raw, m in zip(segs, raws, metas):
+        scan = _preview_scan(None, url, start, end)
+        if scan:
+            if scan.get("facecam"):
+                found.append(scan["facecam"])
+        elif has_module("cv2"):
+            _update(job, status="analyzing", progress=40, message="Mencari kamera wajah...")
+            samples, _ = analyze_faces(raw, m["duration"] or end - start, lambda f: None, min_face=WEBCAM_FACE)
+            cam = plan_facecam(samples, m["width"], m["height"])
+            if cam:
+                found.append(cam)
+    return max(found, key=lambda c: c["support"])["box"] if found else None
 
 
 def ensure_optional_packages():
@@ -1776,22 +1931,27 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def send_file_download(self, filepath: str, filename: str):
+    def send_file_download(self, filepath: str, filename: str, mime: str = "video/mp4", ext: str = ".mp4"):
         if not os.path.isfile(filepath):
             return self.send_json(404, {"error": "file not found"})
         size = os.path.getsize(filepath)
         self.send_response(200)
-        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(size))
         clean_name = safe_filename(filename)
-        if not clean_name.lower().endswith(".mp4"):
-            clean_name += ".mp4"
-        self.send_header("Content-Disposition", f'attachment; filename="{clean_name}"')
+        if not clean_name.lower().endswith(ext):
+            clean_name += ext
+        # Headers are Latin-1: an ASCII name for old browsers, the real one (any script) beside it.
+        plain = clean_name.encode("ascii", "ignore").decode().strip() or f"klip{ext}"
+        self.send_header("Content-Disposition", f"attachment; filename=\"{plain}\"; filename*=UTF-8''{quote(clean_name)}")
         self.send_header("Cache-Control", "no-cache")
         self.cors()
         self.end_headers()
-        with open(filepath, "rb") as f:
-            shutil.copyfileobj(f, self.wfile)
+        try:
+            with open(filepath, "rb") as f:
+                shutil.copyfileobj(f, self.wfile)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass  # the browser cancelled the download
 
     def send_video(self, filepath: str):
         """A video with HTTP range support; Safari will not play media served without it."""
@@ -1898,6 +2058,21 @@ class Handler(BaseHTTPRequestHandler):
             if job.get("status") != "done" or not job.get("output_file"):
                 return self.send_json(400, {"error": "Video belum selesai diproses."})
             return self.send_file_download(job["output_file"], job.get("filename", "clip.mp4"))
+
+        if path == "/export/zip":
+            qs = parse_qs(parsed.query)
+            ids = [i for i in (qs.get("jobs") or [""])[0].split(",") if i][:100]
+            with _jobs_lock:
+                done = [j for j in (_export_jobs.get(i) for i in ids)
+                        if j and j.get("kind") != "preview" and j.get("status") == "done" and j.get("output_file")]
+            if not done:
+                return self.send_json(404, {"error": "Belum ada video yang selesai untuk dibungkus."})
+            folder = tempfile.mkdtemp(prefix="autoclip_zip_")
+            try:
+                archive = zip_exports(done, folder)
+                return self.send_file_download(archive, (qs.get("name") or ["klip"])[0], "application/zip", ".zip")
+            finally:
+                shutil.rmtree(folder, ignore_errors=True)
 
         if path in ("/preview/status", "/preview/video"):
             job_id = (parse_qs(parsed.query).get("id") or [""])[0]

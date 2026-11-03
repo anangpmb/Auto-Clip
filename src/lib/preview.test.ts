@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeWordIndex, centerCropX, cropXAt, layoutFor } from './preview';
+import { activeWordIndex, centerCropX, cropXAt, FACE_ASPECT, fitBox, FULL_FRAME, GAME_ASPECT, gamingCaptionArea, layoutFor } from './preview';
 import type { CaptionCue } from './captions';
 
 describe('layoutFor', () => {
@@ -82,5 +82,28 @@ describe('activeWordIndex', () => {
     expect(activeWordIndex(cue, 1.8)).toBe(0); // gap after A
     expect(activeWordIndex(cue, 2.1)).toBe(1);
     expect(activeWordIndex(cue, 3.9)).toBe(2);
+  });
+});
+
+describe('gamer mode boxes', () => {
+  it('turns the whole frame into the largest centred box of the slot shape', () => {
+    const [x, y, w, h] = fitBox(FULL_FRAME, 1920, 1080, GAME_ASPECT);
+    expect(h).toBe(1);
+    expect((w * 1920) / (h * 1080)).toBeCloseTo(GAME_ASPECT, 6);
+    expect(x + w / 2).toBeCloseTo(0.5, 6);
+    expect(y).toBe(0);
+  });
+
+  it('keeps a box near an edge inside the frame and in shape', () => {
+    const [x, y, w, h] = fitBox([0.9, 0.9, 0.3, 0.3], 1920, 1080, FACE_ASPECT);
+    expect(x + w).toBeLessThanOrEqual(1 + 1e-9);
+    expect(y + h).toBeLessThanOrEqual(1 + 1e-9);
+    expect((w * 1920) / (h * 1080)).toBeCloseTo(FACE_ASPECT, 6);
+  });
+
+  it('puts captions over the gameplay, wherever the webcam is', () => {
+    expect(gamingCaptionArea(false)).toEqual({ top: 0, height: 2 / 3 });
+    expect(gamingCaptionArea(true)).toEqual({ top: 1 / 3, height: 2 / 3 });
+    expect(layoutFor('9:16_gaming', 1920, 1080)).toBe('gaming');
   });
 });

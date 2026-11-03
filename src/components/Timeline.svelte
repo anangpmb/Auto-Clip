@@ -225,7 +225,7 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    background: rgba(255, 77, 109, 0.22);
+    background: var(--accent-soft);
     border-top: 2px solid var(--accent);
     border-bottom: 2px solid var(--accent);
     display: grid;

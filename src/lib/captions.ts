@@ -2,7 +2,7 @@ import type { Word } from './types';
 
 export type CaptionStyle = 'viral' | 'box' | 'classic' | 'neon';
 export type CaptionPosition = 'bottom' | 'center' | 'top';
-export type AspectRatio = '16:9' | '9:16_blur' | '9:16_crop';
+export type AspectRatio = '16:9' | '9:16_blur' | '9:16_crop' | '9:16_gaming';
 
 export interface CaptionWord {
   start: number; // in seconds relative to clip start

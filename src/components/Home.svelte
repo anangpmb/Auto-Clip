@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './ui/Icon.svelte';
   import { newId } from '../lib/ai';
   import { copyText } from '../lib/clipboard';
   import { fetchCaptions, type HelperHealth } from '../lib/helper';
@@ -101,37 +102,38 @@
         required
       />
       <button class="primary" disabled={busy || !health?.ok}>
+        <Icon name={busy ? 'loader' : 'captions'} class={busy ? 'spin' : ''} />
         {busy ? 'Mengambil transkrip…' : 'Ambil transkrip'}
       </button>
     </form>
-    {#if error}<div class="error">{error}</div>{/if}
+    {#if error}<div class="notice bad form-error"><Icon name="alert" /><span>{error}</span></div>{/if}
   </div>
 
   {#if !checking && !health?.ok}
     <div class="setup">
       {#if isMobile}
         <div class="browser-issue">
-          <h2>Buka di komputer</h2>
+          <h2><Icon name="info" /> Buka di komputer</h2>
           <p>
             Helper berjalan di komputer, dan HP/tablet tidak bisa menjangkaunya. Buka situs ini di komputer yang menjalankan
             helper.
           </p>
         </div>
       {:else if rejected}
-        <h2>Helper berjalan, tapi menolak situs ini</h2>
+        <h2><Icon name="warning" /> Helper berjalan, tapi menolak situs ini</h2>
         <p>Matikan helper (tutup jendelanya), lalu jalankan ulang dengan izin untuk alamat situs ini:</p>
         {@render cmd('run', command)}
       {:else}
         {#if safariBlocked}
           <div class="browser-issue">
-            <h2>Di Safari, pakai alamat lokal</h2>
+            <h2><Icon name="info" /> Di Safari, pakai alamat lokal</h2>
             <p>
               Safari memblokir situs https ini untuk menghubungi helper (tanpa menampilkan permintaan izin). Kalau helper sudah
               berjalan, buka <a href={localUrl}>{localUrl}</a>. Launcher AutoClip di bawah membuka alamat itu otomatis.
             </p>
           </div>
         {/if}
-        <h2>Pasang helper sekali, lalu buka dengan satu klik</h2>
+        <h2><Icon name="terminal" /> Pasang helper sekali, lalu buka dengan satu klik</h2>
         <p>
           Browser tidak bisa mengambil data YouTube sendiri. Helper kecil di komputer kamu yang melakukannya (pakai yt-dlp), lalu
           mengirim hasilnya ke halaman ini.
@@ -179,7 +181,10 @@
   {#snippet cmd(key: string, text: string)}
     <div class="cmd">
       <code>{text}</code>
-      <button class="small" onclick={() => copy(key, text)}>{copied === key ? 'Tersalin ✓' : 'Salin'}</button>
+      <button class="small" onclick={() => copy(key, text)}>
+        <Icon name={copied === key ? 'check' : 'copy'} size={14} />
+        {copied === key ? 'Tersalin' : 'Salin'}
+      </button>
     </div>
   {/snippet}
 
@@ -194,7 +199,9 @@
               <span class="t">{p.title}</span>
               <span class="sub">{p.clipCount} klip · {new Date(p.updatedAt).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })}</span>
             </button>
-            <button class="del" onclick={() => remove(p.id)} aria-label="Hapus proyek {p.title}" title="Hapus proyek">×</button>
+            <button class="del icon-btn small" onclick={() => remove(p.id)} aria-label="Hapus proyek {p.title}" title="Hapus proyek">
+              <Icon name="trash" size={14} />
+            </button>
           </div>
         {/each}
       </div>
@@ -217,8 +224,10 @@
   }
   h1 {
     margin: 0;
-    font-size: clamp(26px, 4vw, 38px);
+    font-size: clamp(24px, 3.6vw, 34px);
+    font-weight: 650;
     letter-spacing: -0.02em;
+    line-height: 1.2;
   }
   .hero p {
     margin: 0 auto;
@@ -234,25 +243,42 @@
   }
   form input {
     flex: 1;
-    padding: 12px 14px;
-    font-size: 15px;
+    padding: 9px 14px;
+    font-size: 14px;
+  }
+  form button {
+    padding-inline: 16px;
+  }
+  .form-error {
+    max-width: 720px;
+    width: 100%;
+    margin: 0 auto;
+    text-align: left;
   }
   .setup {
-    padding: 18px 20px;
-    border: 1px solid rgba(251, 191, 36, 0.35);
-    background: rgba(251, 191, 36, 0.06);
-    border-radius: var(--radius);
+    padding: 20px 22px;
+    border-radius: var(--radius-xl);
+    background: var(--panel);
   }
   .setup h2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     margin: 0 0 6px;
-    font-size: 17px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .setup h2 :global(.icon) {
+    color: var(--warn-text);
   }
   .browser-issue {
-    margin: -4px -6px 14px;
+    margin: 0 0 16px;
     padding: 12px 14px;
-    border-radius: 8px;
-    background: rgba(248, 113, 113, 0.12);
-    border: 1px solid rgba(248, 113, 113, 0.45);
+    border-radius: var(--radius-md);
+    background: var(--bad-soft);
+  }
+  .browser-issue h2 :global(.icon) {
+    color: var(--bad-text);
   }
   .browser-issue p {
     margin: 0;
@@ -268,22 +294,24 @@
   .setup li {
     margin: 4px 0;
   }
-  .setup a {
-    color: var(--accent-2);
-  }
   .cmd {
     display: flex;
     align-items: center;
     gap: 8px;
     margin: 10px 0;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: #0b0d11;
+    padding: 6px 6px 6px 12px;
+    border-radius: var(--radius-md);
+    background: var(--field);
     overflow-x: auto;
   }
   .cmd code {
     flex: 1;
+    padding: 0;
+    background: none;
     white-space: nowrap;
+  }
+  .cmd button {
+    flex: none;
   }
   details {
     margin: 10px 0 6px;
@@ -294,7 +322,8 @@
     color: var(--muted);
   }
   .recent h2 {
-    font-size: 16px;
+    font-size: 14px;
+    font-weight: 600;
     margin: 0 0 10px;
   }
   .grid {
@@ -304,10 +333,13 @@
   }
   .card {
     position: relative;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
     background: var(--panel);
     overflow: hidden;
+    transition: background-color 0.15s;
+  }
+  .card:hover {
+    background: var(--panel-2);
   }
   .open {
     display: grid;
@@ -316,7 +348,15 @@
     padding: 0 0 10px;
     background: none;
     border: none;
+    border-radius: 0;
     text-align: left;
+    font-weight: 400;
+  }
+  .open:hover:not(:disabled) {
+    background: none;
+  }
+  .open:active:not(:disabled) {
+    transform: none;
   }
   .open img {
     width: 100%;
@@ -343,16 +383,25 @@
     position: absolute;
     top: 6px;
     right: 6px;
-    width: 26px;
-    height: 26px;
-    padding: 0;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.6);
     border: none;
-    font-size: 16px;
+    background: rgba(0, 0, 0, 0.65);
+    opacity: 0;
+    transition: opacity 0.15s;
   }
-  .del:hover {
+  .card:hover .del,
+  .del:focus-visible {
+    opacity: 1;
+  }
+  .del:hover:not(:disabled) {
     background: var(--bad);
+  }
+  .del:hover :global(.icon) {
+    color: #fff;
+  }
+  @media (hover: none) {
+    .del {
+      opacity: 1;
+    }
   }
   @media (max-width: 640px) {
     form {

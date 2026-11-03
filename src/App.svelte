@@ -2,6 +2,7 @@
   import Home from './components/Home.svelte';
   import ProjectView from './components/ProjectView.svelte';
   import SettingsDialog from './components/SettingsDialog.svelte';
+  import Icon from './components/ui/Icon.svelte';
   import { checkHelper, type HelperHealth } from './lib/helper';
   import { loadSettings, saveSettings } from './lib/storage';
   import type { LoadedProject, Settings } from './lib/types';
@@ -55,7 +56,7 @@
     ><i></i>{status.text}{#if status.extra}<span class="status-extra">{status.extra}</span>{/if}</span
   >
   <button class="ghost settings-btn" onclick={() => (settingsOpen = true)} aria-label="Pengaturan">
-    <span aria-hidden="true">⚙</span><span class="settings-label">Pengaturan</span>
+    <Icon name="settings" /><span class="settings-label">Pengaturan</span>
   </button>
 </header>
 
@@ -64,7 +65,7 @@
     {#key project.meta.id}
       <ProjectView
         initial={project}
-        {settings}
+        bind:settings
         helperOk={!!health?.ok}
         helperHealth={health}
         onclose={() => (project = null)}
@@ -87,8 +88,8 @@
     align-items: center;
     gap: 14px;
     padding: 10px 20px;
-    background: rgba(15, 17, 21, 0.88);
-    backdrop-filter: blur(8px);
+    background: rgba(17, 17, 19, 0.86);
+    backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border);
   }
   .brand {
@@ -98,17 +99,26 @@
     padding: 0;
     background: none;
     border: none;
-    font-size: 17px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .brand:hover:not(:disabled) {
+    background: none;
   }
   .brand b {
-    color: var(--accent);
+    color: var(--muted);
+    font-weight: 500;
   }
   .status {
     margin-left: auto;
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 13px;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: var(--ink-2);
+    font-size: 12px;
     color: var(--muted);
   }
   .status i {
@@ -119,6 +129,7 @@
   }
   .status.ok i {
     background: var(--ok);
+    box-shadow: 0 0 0 3px var(--ok-soft);
   }
   .status.warn i {
     background: var(--warn);
@@ -135,10 +146,7 @@
     flex: none;
   }
   .settings-btn {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 40px;
+    min-height: 36px;
   }
   main {
     padding: 18px 20px 60px;

@@ -1,9 +1,11 @@
+import type { Box } from './preview';
 import type { Clip, LoadedProject, ProjectMeta, ProjectSummary, Settings, Word } from './types';
 
 const SETTINGS_KEY = 'autoclip.settings.v1';
 const INDEX_KEY = 'autoclip.projects.v1';
 const metaKey = (id: string) => `autoclip.project.${id}`;
 const wordsKey = (id: string) => `autoclip.words.${id}`;
+const layoutKey = (videoId: string) => `autoclip.layout.${videoId}`;
 
 export const DEFAULT_SETTINGS: Settings = {
   helperUrl: 'http://127.0.0.1:8765',
@@ -21,6 +23,7 @@ export const DEFAULT_SETTINGS: Settings = {
   captionPosition: 'bottom',
   captionUppercase: true,
   aspectRatio: '9:16_blur',
+  gamingFaceTop: false,
 };
 
 function read<T>(key: string): T | null {
@@ -90,6 +93,22 @@ export function loadProject(id: string): LoadedProject | null {
     compilation: data.compilation ?? [],
     words: words.map(([s, e, t]) => ({ s, e, t })),
   };
+}
+
+/** Gamer mode areas picked by hand for one video; null means found automatically / centred. */
+export interface GamingLayout {
+  face: Box | null;
+  game: Box | null;
+}
+
+export function loadLayout(videoId: string): GamingLayout {
+  const l = read<Partial<GamingLayout>>(layoutKey(videoId));
+  return { face: l?.face ?? null, game: l?.game ?? null };
+}
+
+export function saveLayout(videoId: string, layout: GamingLayout) {
+  if (!layout.face && !layout.game) localStorage.removeItem(layoutKey(videoId));
+  else write(layoutKey(videoId), layout);
 }
 
 export function deleteProject(id: string) {

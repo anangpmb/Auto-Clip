@@ -77,7 +77,7 @@ Opsi lain:
 2. Tempel link YouTube, klik **Ambil transkrip**.
 3. Klik **Cari klip dengan AI**.
 4. Pilih klip, lalu rapikan potongannya:
-   - **Timeline**: seret penanda AWAL (merah) dan AKHIR (biru). Garis hijau menunjukkan area
+   - **Timeline**: seret penanda AWAL (biru) dan AKHIR (biru muda). Garis hijau menunjukkan area
      ideal untuk AKHIR sesuai durasi min/maks. Klik di mana saja untuk memutar dari titik itu.
    - **Transkrip**: seret label AWAL/AKHIR ke kata lain, atau klik sebuah kata untuk memilih
      "Mulai dari kata ini", "Akhiri di kata ini", atau versi per kalimatnya.
@@ -89,6 +89,7 @@ Opsi lain:
 5. Ekspor: **Salin daftar**, **Salin perintah yt-dlp** (mengunduh potongan mentah), atau
    **Unduh JSON**.
 6. Mau satu video highlight dari beberapa momen? Lihat **Kompilasi highlight** di bawah.
+7. Mau semua klip jadi MP4 sekaligus? Tekan **Ekspor massal** (lihat di bawah).
 
 Proyek tersimpan otomatis di browser (localStorage).
 
@@ -146,6 +147,31 @@ menggabungkan ulang (beberapa detik), dan adegan yang sudah dipratinjau sendiri 
 diunduh lagi. Total kompilasi maksimal 10 menit (Shorts dan Reels maks. 3 menit). File
 .SRT/.VTT/.ASS juga mengikuti urutan adegan. Butuh helper 0.5.0 atau lebih baru.
 
+## Mode gamer
+
+Format **Vertikal, mode gamer** untuk video game dengan kamera wajah (webcam) di pojok:
+gameplay mengisi 2/3 layar dan kamera wajah 1/3 sisanya, di bawah atau di atas (pilih
+**Posisi kamera**). Caption selalu berada di area gameplay, jadi tidak menutupi wajah.
+
+- Helper mencari kamera wajah sendiri: wajah yang diam di satu tempat paling lama (wajah
+  di dalam game datang dan pergi). Gameplay diambil dari tengah layar setinggi penuh.
+- Kurang pas? Di pratinjau, tekan **Atur area**, lalu geser kotak **Kamera** dan
+  **Gameplay** (seret sudut kanan bawah untuk ukuran; bisa juga dengan tombol panah dan
+  +/−). Bentuk kotak selalu mengikuti slotnya, dan hasil ekspor memotong persis seperti itu.
+- Area yang kamu atur disimpan per video, jadi dipakai untuk semua klip dari video itu,
+  termasuk ekspor massal. **Kembali ke otomatis** menghapusnya.
+
+Butuh helper 0.6.0 atau lebih baru.
+
+## Ekspor massal
+
+**Ekspor massal** merender beberapa klip sekaligus, masing-masing jadi satu MP4 dengan
+format dan caption yang sama. Pilih klipnya, lalu **Render**. Helper mengerjakannya satu per
+satu; tiap klip bisa diunduh begitu selesai, atau semuanya sekaligus lewat **Unduh semua
+(.zip)**. Nama file diberi nomor sesuai daftar klip (`01 - Judul.mp4`), jadi urutannya
+tetap. Jalur wajah dan kamera dari pratinjau yang sudah pernah dibuka dipakai ulang.
+Butuh helper 0.6.0 atau lebih baru.
+
 ## Pengembangan
 
 ```
@@ -155,6 +181,12 @@ npm test         # unit test logika transkrip & AI
 npm run check    # cek tipe Svelte/TypeScript
 npm run build    # hasil di dist/
 ```
+
+Tampilan mengikuti tampilan gelap kit [stageshow](https://github.com/benjitaylor/skills):
+satu keluarga abu-abu netral, satu warna aksen, warna status hanya untuk status. Token ada
+di `src/app.css`; komponen dasar (ikon, switch, segmented, dialog, menu) di
+`src/components/ui/`. Ikon dari [Lucide](https://lucide.dev) lewat `ui/Icon.svelte`, satu
+ketebalan garis untuk semua; tidak ada emoji sebagai ikon.
 
 ## Deploy ke GitHub Pages
 

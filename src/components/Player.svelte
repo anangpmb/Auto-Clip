@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import Icon from './ui/Icon.svelte';
   import { describePlayerError, loadYouTubeApi } from '../lib/youtube';
 
   interface Props {
@@ -79,7 +80,7 @@
   {#if error}
     <div class="error">
       <p>{error}</p>
-      <a href={`https://www.youtube.com/watch?v=${videoId}`} target="_blank" rel="noreferrer">Buka di YouTube ↗</a>
+      <a href={`https://www.youtube.com/watch?v=${videoId}`} target="_blank" rel="noreferrer" class="yt">Buka di YouTube <Icon name="external" size={14} /></a>
     </div>
   {:else if !ready}
     <div class="loading">Memuat pemutar…</div>
@@ -119,6 +120,9 @@
     color: var(--text);
   }
   .error a {
-    color: var(--accent-2);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
   }
 </style>

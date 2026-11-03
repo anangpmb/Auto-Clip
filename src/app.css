@@ -1,22 +1,60 @@
+/*
+ * Tokens follow the dark look of the stageshow kit: one neutral gray family where depth
+ * comes from lighter surfaces, three text inks, one accent, and status colors for status only.
+ */
 :root {
-  --bg: #0f1115;
-  --panel: #161921;
-  --panel-2: #1d212b;
-  --border: #2a2f3c;
-  --text: #e8eaf0;
-  --muted: #8b93a7;
-  --accent: #ff4d6d;
-  --accent-2: #4dabff;
-  --ok: #34d399;
-  --warn: #fbbf24;
-  --bad: #f87171;
-  --radius: 10px;
+  --bg: #111113; /* canvas */
+  --panel: #1a1a1d; /* surface: cards, panes, dialogs */
+  --panel-2: #222225; /* a well inside a surface */
+  --raised: #29292d; /* buttons, popovers, the thumb of a segmented control */
+  --raised-hover: #313136;
+  --field: #141416;
+
+  --ink-1: rgba(255, 255, 255, 0.04);
+  --ink-2: rgba(255, 255, 255, 0.07);
+  --ink-3: rgba(255, 255, 255, 0.1);
+  --ink-4: rgba(255, 255, 255, 0.13);
+  --ink-5: rgba(255, 255, 255, 0.2);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.13);
+
+  --text: #ececee;
+  --muted: #9d9da1;
+  --faint: #6c6c70;
+  --icon: #a3a3a8;
+
+  --accent: #3b82f6;
+  --accent-hover: #5592f7;
+  --accent-soft: rgba(59, 130, 246, 0.2);
+  --accent-text: #8fb8fa;
+  --accent-2: var(--accent-text); /* links */
+
+  --ok: #22c55e;
+  --ok-soft: rgba(34, 197, 94, 0.16);
+  --ok-text: #4ade80;
+  --warn: #f59e0b;
+  --warn-soft: rgba(245, 158, 11, 0.16);
+  --warn-text: #fbbf24;
+  --bad: #ef4444;
+  --bad-soft: rgba(239, 68, 68, 0.16);
+  --bad-text: #f87171;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius: var(--radius-lg);
+
+  --shadow-float: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 4px 16px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.3);
+  --shadow-satellite: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 14px 32px -8px rgba(0, 0, 0, 0.7), 0 4px 10px -4px rgba(0, 0, 0, 0.5);
+
   color-scheme: dark;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.5;
   color: var(--text);
   background: var(--bg);
+  accent-color: var(--accent);
 }
 
 * {
@@ -41,37 +79,60 @@ textarea {
   color: inherit;
 }
 
+a {
+  color: var(--accent-text);
+}
+
+/* -- buttons: 34px controls; one step of their own color on hover */
+
 button {
-  padding: 7px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel-2);
+  border-radius: var(--radius-md);
+  background: var(--raised);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
   cursor: pointer;
   transition:
-    background 0.15s,
-    border-color 0.15s;
+    background-color 0.15s,
+    border-color 0.15s,
+    color 0.15s;
 }
 
 button:hover:not(:disabled) {
-  border-color: #3b4252;
-  background: #252a36;
+  background: var(--raised-hover);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(0.5px);
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
+button .icon {
+  flex: none;
+  color: var(--icon);
+}
+
 button.primary {
-  border-color: var(--accent);
+  border-color: transparent;
   background: var(--accent);
   color: #fff;
-  font-weight: 600;
+}
+
+button.primary .icon {
+  color: currentColor;
 }
 
 button.primary:hover:not(:disabled) {
-  background: #ff6680;
-  border-color: #ff6680;
+  background: var(--accent-hover);
 }
 
 button.ghost {
@@ -80,69 +141,264 @@ button.ghost {
 }
 
 button.ghost:hover:not(:disabled) {
-  background: var(--panel-2);
+  background: var(--ink-2);
+}
+
+button.danger:hover:not(:disabled),
+button.danger:hover:not(:disabled) .icon {
+  color: var(--bad-text);
 }
 
 button.small {
-  padding: 4px 9px;
+  gap: 5px;
+  padding: 3px 9px;
   font-size: 12px;
+  line-height: 18px;
 }
+
+/* A square button holding one icon; the label goes in aria-label. */
+button.icon-btn {
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+}
+
+button.icon-btn.small {
+  width: 28px;
+  height: 28px;
+}
+
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font-size: inherit;
+}
+
+.link-btn:hover:not(:disabled) {
+  background: none;
+  text-decoration: underline;
+}
+
+/* -- fields */
 
 input,
 select,
 textarea {
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #11141a;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--field);
+  font-size: 13px;
+  line-height: 20px;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--faint);
 }
 
 input:focus,
 select:focus,
 textarea:focus {
-  outline: 2px solid rgba(77, 171, 255, 0.5);
-  outline-offset: 0;
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  padding: 0;
+  box-shadow: none;
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent-2);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
 code {
-  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
-  font-size: 13px;
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
   padding: 1px 5px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--ink-2);
 }
+
+/* -- small parts */
 
 .muted {
   color: var(--muted);
   font-size: 13px;
 }
 
+.label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* A section heading inside a panel or dialog. */
+.group-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--ink-2);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.badge.accent {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.badge.ok {
+  background: var(--ok-soft);
+  color: var(--ok-text);
+}
+
+.badge.warn {
+  background: var(--warn-soft);
+  color: var(--warn-text);
+}
+
+.badge.bad {
+  background: var(--bad-soft);
+  color: var(--bad-text);
+}
+
+/* A message in the flow: an icon in the tone's color, then the words. */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--ink-1);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.notice > .icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--icon);
+}
+
+.notice.warn {
+  background: var(--warn-soft);
+}
+
+.notice.warn > .icon {
+  color: var(--warn-text);
+}
+
+.notice.bad,
+.error {
+  background: var(--bad-soft);
+}
+
+.notice.bad > .icon {
+  color: var(--bad-text);
+}
+
+.notice.ok {
+  background: var(--ok-soft);
+}
+
+.notice.ok > .icon {
+  color: var(--ok-text);
+}
+
+.notice.accent {
+  background: var(--accent-soft);
+}
+
+.notice.accent > .icon {
+  color: var(--accent-text);
+}
+
 .error {
   padding: 10px 12px;
-  border-radius: var(--radius);
-  background: rgba(248, 113, 113, 0.1);
-  border: 1px solid rgba(248, 113, 113, 0.4);
+  border-radius: var(--radius-md);
   color: #fecaca;
-  font-size: 14px;
+  font-size: 13px;
   text-align: left;
+}
+
+.meter {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--ink-2);
+}
+
+.meter > i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+.meter.ok > i {
+  background: var(--ok);
+}
+
+.meter.bad > i {
+  background: var(--bad);
 }
 
 .spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid var(--border);
+  border: 2px solid var(--ink-3);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
 }
 
 @keyframes spin {
   to {
     transform: rotate(360deg);
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .spin {
+    animation-duration: 2.4s;
+  }
+}
+
+/* Quiet scrollbars on the dark surfaces. */
+* {
+  scrollbar-color: var(--ink-4) transparent;
 }

@@ -5,6 +5,9 @@
   import TranscriptPane from './TranscriptPane.svelte';
   import CaptionOverlay from './CaptionOverlay.svelte';
   import ExportModal from './ExportModal.svelte';
+  import Icon from './ui/Icon.svelte';
+  import Segmented from './ui/Segmented.svelte';
+  import Switch from './ui/Switch.svelte';
   import type { Clip, Settings, Unit, Word } from '../lib/types';
   import type { HelperHealth } from '../lib/helper';
   import {
@@ -38,7 +41,7 @@
     videoId,
     videoUrl = '',
     videoTitle = '',
-    settings,
+    settings = $bindable(),
     helperOk = false,
     helperHealth = null,
     onchange,
@@ -171,15 +174,11 @@
         {#if floating}
           <div class="mini-bar">
             <span class="mini-title">{playing ? 'Memutar' : 'Dijeda'} · {fmtTime(currentTime)}</span>
-            <button class="mini-btn" onclick={showDockedPlayer} aria-label="Kembali ke pemutar" title="Kembali ke pemutar">
-              <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"
-                ><path d="M10 16V4m0 0-5 5m5-5 5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg
-              >
+            <button class="icon-btn ghost" onclick={showDockedPlayer} aria-label="Kembali ke pemutar" title="Kembali ke pemutar">
+              <Icon name="arrow-up" />
             </button>
-            <button class="mini-btn" onclick={() => (miniDismissed = true)} aria-label="Tutup pemutar mini" title="Tutup pemutar mini">
-              <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"
-                ><path d="M5 5l10 10M15 5 5 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg
-              >
+            <button class="icon-btn ghost" onclick={() => (miniDismissed = true)} aria-label="Tutup pemutar mini" title="Tutup pemutar mini">
+              <Icon name="close" />
             </button>
           </div>
         {/if}
@@ -205,72 +204,72 @@
     <div class="side">
       <div class="duration {status}">
         <span class="big">{fmtDuration(duration)}</span>
-        <span class="range">{fmtTime(bounds.start, true)} → {fmtTime(bounds.end, true)}</span>
-        <span class="note">
-          {#if status === 'short'}Lebih pendek dari {settings.minSec} dtk{:else if status === 'long'}Lebih panjang dari {settings.maxSec} dtk{:else}Durasi pas ({settings.minSec}–{settings.maxSec} dtk){/if}
+        <span class="range">{fmtTime(bounds.start, true)}–{fmtTime(bounds.end, true)}</span>
+        <span class="badge {status === 'ok' ? 'ok' : 'warn'} dur-badge">
+          {#if status === 'short'}Lebih pendek dari {settings.minSec} dtk{:else if status === 'long'}Lebih panjang dari {settings.maxSec} dtk{:else}Durasi pas{/if}
         </span>
       </div>
 
       <div class="play">
-        <button class="primary" onclick={playClip}>▶ Putar klip</button>
+        <button class="play-main" onclick={playClip}><Icon name="play" /> Putar klip</button>
         <button onclick={checkStart} title="Putar 4 detik pertama">Cek awal</button>
         <button onclick={checkEnd} title="Putar 4 detik terakhir">Cek akhir</button>
-        <button onclick={() => player?.pause()} aria-label="Jeda">⏸</button>
+        <button class="icon-btn" onclick={() => player?.pause()} aria-label="Jeda" title="Jeda"><Icon name="pause" /></button>
       </div>
 
-      <div class="export-action">
-        <button
-          class="export-btn"
-          onclick={() => {
-            player?.pause(); // the final-result preview plays its own sound
-            showExportModal = true;
-          }}
-        >
-          🎬 Pratinjau Hasil Akhir & Ekspor
-        </button>
-      </div>
+      <button
+        class="primary export-btn"
+        onclick={() => {
+          player?.pause(); // the final-result preview plays its own sound
+          showExportModal = true;
+        }}
+      >
+        <Icon name="clapperboard" /> Pratinjau hasil akhir & ekspor
+      </button>
 
       <div class="caption-bar">
-        <label class="cap-toggle">
-          <input type="checkbox" bind:checked={settings.captionEnabled} />
-          <span class="cap-title">Auto Caption</span>
-        </label>
+        <Switch bind:checked={settings.captionEnabled}><Icon name="captions" size={14} /> Caption</Switch>
         {#if settings.captionEnabled}
           <div class="cap-options">
-            <select bind:value={settings.captionStyle} aria-label="Gaya Caption">
-              <option value="viral">🔥 Viral Highlight</option>
-              <option value="box">⬛ Modern Box</option>
-              <option value="neon">✨ Neon Pop</option>
-              <option value="classic">📄 Klasik</option>
+            <select bind:value={settings.captionStyle} aria-label="Gaya caption">
+              <option value="viral">Viral</option>
+              <option value="box">Kotak</option>
+              <option value="neon">Neon</option>
+              <option value="classic">Klasik</option>
             </select>
-            <select bind:value={settings.captionPosition} aria-label="Posisi Caption">
-              <option value="bottom">Bawah</option>
-              <option value="center">Tengah</option>
-              <option value="top">Atas</option>
-            </select>
+            <Segmented
+              label="Posisi caption"
+              bind:value={settings.captionPosition}
+              options={[
+                { value: 'bottom', label: 'Bawah' },
+                { value: 'center', label: 'Tengah' },
+                { value: 'top', label: 'Atas' },
+              ]}
+            />
           </div>
         {/if}
       </div>
 
-      <div class="nudge">
-        <span class="lbl start">AWAL</span>
-        <button onclick={() => nudge('start', -1, true)} title="Tambah 1 kalimat sebelumnya">« kalimat</button>
-        <button onclick={() => nudge('start', -1, false)} title="Mundur 1 kata">‹ kata</button>
-        <button onclick={() => nudge('start', 1, false)} title="Maju 1 kata">kata ›</button>
-        <button onclick={() => nudge('start', 1, true)} title="Buang kalimat pertama">kalimat »</button>
-      </div>
-      <div class="nudge">
-        <span class="lbl end">AKHIR</span>
-        <button onclick={() => nudge('end', -1, true)} title="Buang kalimat terakhir">« kalimat</button>
-        <button onclick={() => nudge('end', -1, false)} title="Mundur 1 kata">‹ kata</button>
-        <button onclick={() => nudge('end', 1, false)} title="Maju 1 kata">kata ›</button>
-        <button onclick={() => nudge('end', 1, true)} title="Tambah 1 kalimat berikutnya">kalimat »</button>
+      <div class="nudges">
+        {#each [{ edge: 'start' as Edge, name: 'Awal' }, { edge: 'end' as Edge, name: 'Akhir' }] as row (row.edge)}
+          <div class="nudge" role="group" aria-label="Geser {row.name.toLowerCase()} klip">
+            <span class="lbl">{row.name}</span>
+            <button onclick={() => nudge(row.edge, -1, true)} title={row.edge === 'start' ? 'Tambah 1 kalimat sebelumnya' : 'Buang kalimat terakhir'}>
+              <Icon name="chevrons-left" size={14} /> kalimat
+            </button>
+            <button onclick={() => nudge(row.edge, -1, false)} title="Mundur 1 kata"><Icon name="chevron-left" size={14} /> kata</button>
+            <button onclick={() => nudge(row.edge, 1, false)} title="Maju 1 kata">kata <Icon name="chevron-right" size={14} /></button>
+            <button onclick={() => nudge(row.edge, 1, true)} title={row.edge === 'start' ? 'Buang kalimat pertama' : 'Tambah 1 kalimat berikutnya'}>
+              kalimat <Icon name="chevrons-right" size={14} />
+            </button>
+          </div>
+        {/each}
       </div>
 
       <div class="opts">
-        <label><input type="checkbox" bind:checked={snap} /> Seret menempel ke kalimat</label>
+        <Switch bind:checked={snap}>Seret menempel ke kalimat</Switch>
         {#if edited}
-          <button class="ghost small" onclick={resetToAi}>↺ Kembalikan saran AI</button>
+          <button class="ghost small" onclick={resetToAi}><Icon name="reset" size={14} /> Kembalikan saran AI</button>
         {/if}
       </div>
     </div>
@@ -326,7 +325,7 @@
       videoUrl={videoUrl || `https://www.youtube.com/watch?v=${videoId}`}
       {videoId}
       videoTitle={videoTitle || clip.title}
-      {settings}
+      bind:settings
       helperOk={helperOk ?? false}
       helperHealth={helperHealth ?? null}
       onclose={() => (showExportModal = false)}
@@ -344,17 +343,20 @@
     gap: 4px;
   }
   .title {
-    font-size: 18px;
-    font-weight: 700;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 26px;
     background: transparent;
     border: 1px solid transparent;
     padding: 4px 8px;
-    margin-left: -8px;
+    margin-left: -9px;
   }
-  .title:hover,
-  .title:focus {
+  .title:hover {
     border-color: var(--border);
     background: var(--panel-2);
+  }
+  .title:focus {
+    background: var(--field);
   }
   .reason {
     margin: 0;
@@ -385,11 +387,10 @@
     inset: auto 20px 20px auto;
     width: min(380px, calc(100vw - 40px));
     z-index: 40;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: var(--panel);
+    border-radius: var(--radius-xl);
+    background: var(--raised);
     overflow: hidden;
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.6);
+    box-shadow: var(--shadow-satellite);
     animation: mini-in 200ms ease-out;
   }
   .player-shell.floating :global(.player) {
@@ -409,19 +410,6 @@
     font-size: 12px;
     color: var(--muted);
     font-variant-numeric: tabular-nums;
-  }
-  .mini-btn {
-    display: grid;
-    place-items: center;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    border: none;
-    background: transparent;
-    color: var(--text);
-  }
-  .mini-btn:hover {
-    background: var(--panel-2);
   }
   @media (max-width: 640px) {
     .player-shell.floating {
@@ -445,120 +433,91 @@
   }
   .duration {
     display: grid;
-    gap: 2px;
-    padding: 10px 12px;
-    border-radius: var(--radius);
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: baseline;
+    gap: 2px 10px;
+    padding: 12px 14px;
+    border-radius: var(--radius-lg);
     background: var(--panel-2);
-    border-left: 4px solid var(--ok);
-  }
-  .duration.short,
-  .duration.long {
-    border-left-color: var(--warn);
   }
   .big {
     font-size: 22px;
-    font-weight: 800;
-  }
-  .range {
-    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
     font-variant-numeric: tabular-nums;
   }
-  .note {
-    font-size: 12px;
+  .range {
+    font-size: 12.5px;
     color: var(--muted);
+    font-variant-numeric: tabular-nums;
   }
-  .duration.short .note,
-  .duration.long .note {
-    color: var(--warn);
+  .dur-badge {
+    grid-column: 1 / -1;
+    justify-self: start;
+    margin-top: 4px;
   }
-  .play,
-  .nudge {
+  .play {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
     align-items: center;
   }
+  .play-main :global(.icon) {
+    fill: currentColor;
+  }
+  .export-btn {
+    justify-content: center;
+    width: 100%;
+    min-height: 38px;
+  }
+  .caption-bar {
+    display: grid;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: var(--radius-lg);
+    background: var(--panel-2);
+  }
+  .caption-bar :global(.switch-row .icon) {
+    color: var(--icon);
+  }
+  .cap-options {
+    display: grid;
+    grid-template-columns: minmax(86px, auto) minmax(0, 1fr);
+    gap: 8px;
+  }
+  .cap-options select {
+    padding: 4px 8px;
+    font-size: 12.5px;
+  }
+  .nudges {
+    display: grid;
+    gap: 6px;
+  }
+  .nudge {
+    display: grid;
+    grid-template-columns: 46px repeat(4, minmax(0, 1fr));
+    gap: 4px;
+    align-items: center;
+  }
   .nudge button {
-    flex: 1;
-    padding: 6px 4px;
+    justify-content: center;
+    gap: 2px;
+    padding: 4px 2px;
     font-size: 12px;
   }
   .lbl {
-    width: 52px;
     font-size: 11px;
-    font-weight: 800;
-    text-align: center;
-    padding: 3px 0;
-    border-radius: 4px;
-  }
-  .lbl.start {
-    background: var(--accent);
-  }
-  .lbl.end {
-    background: var(--accent-2);
-    color: #001;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
   .opts {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: 8px;
     align-items: center;
     justify-content: space-between;
-    font-size: 13px;
-    color: var(--muted);
-  }
-  .opts label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-  }
-  .export-action {
-    display: flex;
-  }
-  .export-btn {
-    width: 100%;
-    padding: 8px 12px;
-    font-weight: 700;
-    font-size: 13px;
-    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
-    border: none;
-    color: #fff;
-    border-radius: var(--radius);
-    cursor: pointer;
-    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
-    transition: filter 0.15s ease;
-  }
-  .export-btn:hover {
-    filter: brightness(1.1);
-  }
-  .caption-bar {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 8px 10px;
-    background: var(--panel-2);
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-  }
-  .cap-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  .cap-options {
-    display: flex;
-    gap: 6px;
-  }
-  .cap-options select {
-    flex: 1;
-    padding: 3px 6px;
-    font-size: 11px;
-    border-radius: 4px;
-    background: var(--panel);
   }
   @media (max-width: 900px) {
     .top {

@@ -90,5 +90,7 @@ export interface Settings {
   captionStyle: 'viral' | 'box' | 'classic' | 'neon';
   captionPosition: 'bottom' | 'center' | 'top';
   captionUppercase: boolean;
-  aspectRatio: '16:9' | '9:16_blur' | '9:16_crop';
+  aspectRatio: '16:9' | '9:16_blur' | '9:16_crop' | '9:16_gaming';
+  /** Gamer mode: the webcam above the gameplay instead of below it. */
+  gamingFaceTop: boolean;
 }

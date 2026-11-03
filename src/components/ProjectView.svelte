@@ -1,7 +1,10 @@
 <script lang="ts">
   import { untrack } from 'svelte';
+  import BulkExportModal from './BulkExportModal.svelte';
   import ClipEditor from './ClipEditor.svelte';
   import ExportModal from './ExportModal.svelte';
+  import Icon from './ui/Icon.svelte';
+  import Menu from './ui/Menu.svelte';
   import type { Clip, LoadedProject, Settings } from '../lib/types';
   import {
     buildUnits,
@@ -30,7 +33,7 @@
     onclose: () => void;
     onsettings: () => void;
   }
-  let { initial, settings, helperOk, helperHealth = null, onclose, onsettings }: Props = $props();
+  let { initial, settings = $bindable(), helperOk, helperHealth = null, onclose, onsettings }: Props = $props();
 
   // The parent remounts this view per project, so the initial value is all we need.
   let meta = $state(untrack(() => initial.meta));
@@ -41,6 +44,7 @@
   /** Clip ids joined into one highlight video, in play order. */
   let compilation = $state<string[]>(untrack(() => initial.compilation ?? []));
   let showCompilation = $state(false);
+  let showBulk = $state(false);
 
   const units = $derived(buildUnits(words));
   const selected = $derived(clips.find((c) => c.id === selectedId) ?? null);
@@ -261,14 +265,14 @@
 
 <section class="project">
   <div class="bar">
-    <button class="ghost" onclick={onclose}>← Proyek</button>
+    <button class="ghost back" onclick={onclose}><Icon name="back" /> Proyek</button>
     {#if meta.video.thumbnail}<img class="thumb" src={meta.video.thumbnail} alt="" />{/if}
     <div class="info">
       <h1 title={meta.video.title}>{meta.video.title}</h1>
       <p>{meta.video.channel} · {fmtTime(meta.video.duration)} · {words.length.toLocaleString('id-ID')} kata</p>
     </div>
     <label class="track">
-      <span>Transkrip</span>
+      <span class="label">Transkrip</span>
       <select value={meta.track} onchange={(e) => changeTrack(e.currentTarget)} disabled={trackBusy || !helperOk}>
         {#each meta.tracks as t (t.key)}
           <option value={t.key}>{t.name} · {t.kind === 'auto' ? 'otomatis' : 'manual'}</option>
@@ -278,39 +282,51 @@
   </div>
 
   {#if meta.wordTiming === 'estimated'}
-    <div class="notice">
-      Transkrip ini dari subtitle manual, jadi waktu per kata hanya perkiraan. Kalau ada pilihan "otomatis", potongannya biasanya
-      lebih presisi.
+    <div class="notice warn">
+      <Icon name="warning" />
+      <span>
+        Transkrip ini dari subtitle manual, jadi waktu per kata hanya perkiraan. Kalau ada pilihan "otomatis", potongannya biasanya
+        lebih presisi.
+      </span>
     </div>
   {/if}
 
   <div class="actions">
     {#if aiBusy}
-      <span class="spinner" aria-hidden="true"></span>
-      <span>{aiStatus}</span>
+      <span class="busy"><Icon name="loader" class="spin" /> {aiStatus}</span>
       <button onclick={() => controller?.abort()}>Batal</button>
     {:else}
-      <button class="primary" onclick={runAI}>{clips.length ? '✨ Cari ulang dengan AI' : '✨ Cari klip dengan AI'}</button>
+      <button class="primary" onclick={runAI}>
+        <Icon name="search" />
+        {clips.length ? 'Cari ulang dengan AI' : 'Cari klip dengan AI'}
+      </button>
       <span class="muted">{PROVIDERS[settings.provider].label} · {settings.minSec}–{settings.maxSec} dtk · maks {settings.maxClips} klip</span>
     {/if}
     <span class="spacer"></span>
     {#if clips.length}
-      <button class="primary" onclick={() => (showExportModal = true)} title="Ekspor video dengan auto caption">🎬 Ekspor Video</button>
-      <button onclick={downloadSelectedSrt} title="Unduh subtitle .srt untuk klip yang dipilih">Unduh Caption (.srt)</button>
-      <button onclick={copyList}>Salin daftar</button>
-      <button onclick={copyYtDlp} title="Perintah untuk mengunduh potongan mentah dengan yt-dlp">Salin perintah yt-dlp</button>
-      <button onclick={downloadJson}>Unduh JSON</button>
+      <button onclick={() => (showBulk = true)} title="Render beberapa klip sekaligus">
+        <Icon name="bulk" /> Ekspor massal
+      </button>
+      <Menu
+        label="Lainnya"
+        items={[
+          { label: 'Unduh caption klip ini (.srt)', icon: 'file', onclick: downloadSelectedSrt, disabled: !selected },
+          { label: 'Salin daftar klip', icon: 'copy', onclick: copyList },
+          { label: 'Salin perintah yt-dlp', icon: 'terminal', onclick: copyYtDlp },
+          { label: 'Unduh JSON', icon: 'download', onclick: downloadJson },
+        ]}
+      />
     {/if}
   </div>
 
-  {#if error}<div class="error">{error}</div>{/if}
+  {#if error}<div class="notice bad"><Icon name="alert" /><span>{error}</span></div>{/if}
 
   {#if clips.length}
     <div class="workspace">
-      <aside class="list">
+      <aside class="list" aria-label="Klip">
         <section class="comp" class:filled={compClips.length > 0} aria-labelledby="comp-title">
           <div class="comp-head">
-            <h2 id="comp-title">🎞️ Kompilasi highlight</h2>
+            <h2 id="comp-title"><Icon name="film" /> Kompilasi highlight</h2>
             {#if compClips.length}
               <span class="comp-meta" class:over={compTotal > SHORTS_SECONDS}>
                 {compClips.length} adegan · {fmtDuration(compTotal)}
@@ -318,15 +334,13 @@
             {/if}
           </div>
           {#if compClips.length}
-            <button class="primary comp-open" onclick={() => (showCompilation = true)}>Atur, Pratinjau & Ekspor</button>
+            <button class="primary comp-open" onclick={() => (showCompilation = true)}>
+              <Icon name="clapperboard" /> Atur, Pratinjau & Ekspor
+            </button>
           {:else}
             <p class="comp-hint">
               Gabungkan beberapa klip jadi satu video. Tekan
-              <span class="plus-chip" aria-hidden="true"
-                ><svg viewBox="0 0 16 16" width="10" height="10"
-                  ><path d="M2.5 5.5h8v8h-8zM5.5 2.5h8v8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /></svg
-                >+</span
-              > di klip, sesuai urutan tayangnya.
+              <span class="chip-sample" aria-hidden="true"><Icon name="layers" size={12} />+</span> di klip, sesuai urutan tayangnya.
             </p>
           {/if}
         </section>
@@ -337,20 +351,25 @@
           {@const edited = c.aiW0 !== null && (c.w0 !== c.aiW0 || c.w1 !== c.aiW1)}
           {@const scene = compilation.indexOf(c.id)}
           <div class="item" class:active={c.id === selectedId}>
-            <button class="pick" onclick={() => (selectedId = c.id)}>
+            <button class="pick" onclick={() => (selectedId = c.id)} aria-current={c.id === selectedId ? 'true' : undefined}>
               <span class="n">{i + 1}</span>
               <span class="body">
                 <span class="t">{c.title}</span>
                 <span class="sub">
                   {fmtTime(b.start)}–{fmtTime(b.end)} · <span class="dur {st}">{fmtDuration(b.end - b.start)}</span>
                   {#if c.score}· skor {c.score}{/if}
-                  {#if edited}<span class="badge">diedit</span>{/if}
+                  {#if edited}<span class="badge accent">diedit</span>{/if}
                 </span>
                 <span class="snip">“{joinWords(words, c.w0, Math.min(c.w1, c.w0 + 9))}…”</span>
               </span>
             </button>
             <div class="tools">
-              <button class="del" onclick={() => deleteClip(c.id)} aria-label="Hapus klip {i + 1}" title="Hapus klip">×</button>
+              <button
+                class="icon-btn small ghost danger"
+                onclick={() => deleteClip(c.id)}
+                aria-label="Hapus klip {i + 1}"
+                title="Hapus klip"><Icon name="trash" size={14} /></button
+              >
               <button
                 class="in-comp"
                 class:on={scene >= 0}
@@ -359,15 +378,13 @@
                 aria-label="Masukkan klip {i + 1} ke kompilasi"
                 title={scene >= 0 ? `Adegan ${scene + 1} di kompilasi. Tekan untuk mengeluarkan.` : 'Masukkan ke kompilasi'}
               >
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"
-                  ><path d="M2.5 5.5h8v8h-8zM5.5 2.5h8v8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" /></svg
-                >
+                <Icon name="layers" size={13} />
                 {#if scene >= 0}{scene + 1}{:else}+{/if}
               </button>
             </div>
           </div>
         {/each}
-        <button class="add" onclick={addManualClip}>+ Tambah klip manual</button>
+        <button class="add" onclick={addManualClip}><Icon name="plus" /> Tambah klip manual</button>
       </aside>
 
       <div class="panel">
@@ -379,7 +396,7 @@
             videoId={meta.video.id}
             videoUrl={meta.video.url}
             videoTitle={meta.video.title}
-            {settings}
+            bind:settings
             {helperOk}
             {helperHealth}
             onchange={updateClip}
@@ -392,12 +409,13 @@
     </div>
   {:else if !aiBusy}
     <div class="empty">
+      <Icon name="scissors" size={20} />
       <h2>Transkrip siap</h2>
       <p>
-        Klik <b>Cari klip dengan AI</b> untuk mendapatkan saran potongan, lalu rapikan awal dan akhirnya lewat timeline dan transkrip.
+        Tekan <b>Cari klip dengan AI</b> untuk mendapatkan saran potongan, lalu rapikan awal dan akhirnya lewat timeline dan transkrip.
         Kamu juga bisa membuat klip sendiri.
       </p>
-      <button onclick={addManualClip}>+ Tambah klip manual</button>
+      <button onclick={addManualClip}><Icon name="plus" /> Tambah klip manual</button>
     </div>
   {/if}
 
@@ -409,7 +427,7 @@
       videoUrl={meta.video.url}
       videoId={meta.video.id}
       videoTitle={meta.video.title}
-      {settings}
+      bind:settings
       {helperOk}
       {helperHealth}
       onclose={() => (showCompilation = false)}
@@ -427,14 +445,28 @@
       videoUrl={meta.video.url}
       videoId={meta.video.id}
       videoTitle={meta.video.title}
-      {settings}
+      bind:settings
       {helperOk}
       {helperHealth}
       onclose={() => (showExportModal = false)}
     />
   {/if}
 
-  {#if toast}<div class="toast" role="status">{toast}</div>{/if}
+  {#if showBulk}
+    <BulkExportModal
+      {clips}
+      {words}
+      videoUrl={meta.video.url || `https://www.youtube.com/watch?v=${meta.video.id}`}
+      videoId={meta.video.id}
+      videoTitle={meta.video.title}
+      bind:settings
+      {helperOk}
+      {helperHealth}
+      onclose={() => (showBulk = false)}
+    />
+  {/if}
+
+  {#if toast}<div class="toast" role="status"><Icon name="check" size={14} /> {toast}</div>{/if}
 </section>
 
 <style>
@@ -449,11 +481,14 @@
     align-items: center;
     gap: 14px;
   }
+  .back {
+    flex: none;
+  }
   .thumb {
-    width: 96px;
+    width: 88px;
     aspect-ratio: 16 / 9;
     object-fit: cover;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
   }
   .info {
     flex: 1;
@@ -461,7 +496,8 @@
   }
   h1 {
     margin: 0;
-    font-size: 18px;
+    font-size: 16px;
+    font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -469,29 +505,29 @@
   .info p {
     margin: 2px 0 0;
     color: var(--muted);
-    font-size: 13px;
+    font-size: 12.5px;
   }
   .track {
     display: grid;
-    gap: 2px;
-    font-size: 12px;
-    color: var(--muted);
+    gap: 3px;
   }
   .track select {
     max-width: 260px;
-  }
-  .notice {
-    padding: 8px 12px;
-    border-radius: var(--radius);
-    background: rgba(251, 191, 36, 0.1);
-    border: 1px solid rgba(251, 191, 36, 0.35);
-    font-size: 13px;
   }
   .actions {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
+  }
+  .busy {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .busy :global(.icon) {
+    color: var(--accent-text);
   }
   .spacer {
     flex: 1;
@@ -504,7 +540,7 @@
   }
   .list {
     display: grid;
-    gap: 8px;
+    gap: 6px;
     position: sticky;
     top: 70px;
     max-height: calc(100vh - 90px);
@@ -514,13 +550,16 @@
   .item {
     position: relative;
     display: flex;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
     background: var(--panel);
+    transition: background-color 0.15s;
+  }
+  .item:hover {
+    background: var(--panel-2);
   }
   .item.active {
-    border-color: var(--accent);
-    background: #1d1a24;
+    background: var(--panel-2);
+    box-shadow: inset 0 0 0 1px var(--accent);
   }
   .pick {
     flex: 1;
@@ -530,22 +569,30 @@
     text-align: left;
     background: none;
     border: none;
-    padding: 10px;
+    padding: 12px;
     min-width: 0;
+  }
+  .pick:hover:not(:disabled) {
+    background: none;
+  }
+  .pick:active:not(:disabled) {
+    transform: none;
   }
   .n {
     flex: none;
-    width: 24px;
-    height: 24px;
+    width: 22px;
+    height: 22px;
     display: grid;
     place-items: center;
     border-radius: 50%;
-    background: var(--panel-2);
-    font-size: 12px;
-    font-weight: 700;
+    background: var(--ink-3);
+    font-size: 11.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
   }
   .item.active .n {
     background: var(--accent);
+    color: #fff;
   }
   .body {
     display: grid;
@@ -554,30 +601,30 @@
   }
   .t {
     font-weight: 600;
-    font-size: 14px;
+    font-size: 13.5px;
+    line-height: 1.35;
   }
   .sub {
     font-size: 12px;
     color: var(--muted);
+    font-weight: 400;
   }
   .dur.ok {
-    color: var(--ok);
+    color: var(--ok-text);
   }
   .dur.short,
   .dur.long {
-    color: var(--warn);
+    color: var(--warn-text);
   }
-  .badge {
+  .sub .badge {
+    height: 18px;
     margin-left: 4px;
-    padding: 0 6px;
-    border-radius: 999px;
-    font-size: 11px;
-    background: rgba(77, 171, 255, 0.18);
-    color: var(--accent-2);
+    vertical-align: 1px;
   }
   .snip {
     font-size: 12px;
-    color: #9aa1b4;
+    font-weight: 400;
+    color: var(--faint);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -588,73 +635,72 @@
     align-items: center;
     justify-content: space-between;
     gap: 6px;
-    padding: 6px;
+    padding: 8px 8px 10px 0;
   }
-  .del {
-    width: 26px;
-    height: 26px;
-    padding: 0;
-    border: none;
-    background: none;
-    color: var(--muted);
-    font-size: 18px;
-  }
-  .del:hover {
-    color: var(--bad);
+  .tools :global(.icon-btn .icon) {
+    color: var(--faint);
   }
   /* Numbered like a photo picker: the number is the scene's place in the compilation.
-     Square and blue, so it never reads as the clip's own (round) number. */
+     Square and in the accent, so it never reads as the clip's own (round) number. */
   .in-comp {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
     gap: 3px;
+    justify-content: center;
     min-width: 40px;
-    height: 28px;
+    height: 26px;
     padding: 0 7px;
     border-radius: 7px;
-    border: 1.5px dashed var(--border);
+    border: 1px dashed var(--ink-5);
     background: transparent;
     color: var(--muted);
-    font-size: 14px;
-    font-weight: 700;
+    font-size: 13px;
+    font-weight: 600;
     line-height: 1;
     font-variant-numeric: tabular-nums;
   }
-  .in-comp:hover {
-    border-color: var(--accent-2);
+  .in-comp:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: var(--accent-soft);
     color: var(--text);
   }
   .in-comp.on {
-    border: 1.5px solid var(--accent-2);
-    background: var(--accent-2);
-    color: #08111d;
-    font-size: 13px;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #fff;
   }
-  .in-comp.on:hover {
-    background: #74bdff;
+  .in-comp.on :global(.icon) {
+    color: currentColor;
+  }
+  .in-comp.on:hover:not(:disabled) {
+    background: var(--accent-hover);
   }
   .comp {
     display: grid;
-    gap: 8px;
+    gap: 10px;
     padding: 12px;
-    border: 1px dashed var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-lg);
+    background: var(--panel);
+    box-shadow: inset 0 0 0 1px var(--border);
   }
   .comp.filled {
-    border-style: solid;
-    border-color: rgba(255, 77, 109, 0.45);
-    background: rgba(255, 77, 109, 0.07);
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.45);
   }
   .comp-head {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     gap: 8px;
   }
   .comp h2 {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     margin: 0;
-    font-size: 14px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .comp h2 :global(.icon) {
+    color: var(--icon);
   }
   .comp-meta {
     font-size: 12px;
@@ -663,61 +709,80 @@
     font-variant-numeric: tabular-nums;
   }
   .comp-meta.over {
-    color: var(--warn);
+    color: var(--warn-text);
+  }
+  .comp-open {
+    justify-content: center;
   }
   .comp-hint {
     margin: 0;
     font-size: 12px;
     color: var(--muted);
   }
-  .plus-chip {
+  .chip-sample {
     display: inline-flex;
     align-items: center;
     gap: 2px;
     height: 18px;
     padding: 0 5px;
     border-radius: 5px;
-    border: 1.5px dashed var(--muted);
-    font-weight: 700;
+    border: 1px dashed var(--ink-5);
+    font-weight: 600;
     font-size: 11px;
     line-height: 1;
     vertical-align: -3px;
   }
   .add {
+    justify-content: center;
     border-style: dashed;
+    background: transparent;
+    color: var(--muted);
   }
   .panel {
     min-width: 0;
-    padding: 16px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    padding: 18px;
+    border-radius: var(--radius-xl);
     background: var(--panel);
   }
   .empty {
-    padding: 40px 20px;
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    padding: 44px 20px;
     text-align: center;
-    border: 1px dashed var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-xl);
+    background: var(--panel);
+  }
+  .empty > :global(.icon) {
+    color: var(--icon);
   }
   .empty h2 {
-    margin: 0 0 8px;
+    margin: 0;
+    font-size: 16px;
   }
   .empty p {
     max-width: 560px;
-    margin: 0 auto 16px;
+    margin: 0 auto 8px;
     color: var(--muted);
+    font-size: 13px;
   }
   .toast {
     position: fixed;
     bottom: 20px;
     left: 50%;
     transform: translateX(-50%);
-    padding: 10px 16px;
-    border-radius: 999px;
-    background: #2b3245;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-    font-size: 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-radius: var(--radius-lg);
+    background: var(--raised);
+    box-shadow: var(--shadow-satellite);
+    font-size: 13px;
     z-index: 20;
+  }
+  .toast :global(.icon) {
+    color: var(--ok-text);
   }
   @media (max-width: 1000px) {
     .workspace {
@@ -746,6 +811,9 @@
     .track select {
       max-width: none;
       width: 100%;
+    }
+    .panel {
+      padding: 14px;
     }
   }
 </style>
