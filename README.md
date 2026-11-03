@@ -89,12 +89,40 @@ Opsi lain:
 5. Ekspor: **Salin daftar**, **Salin perintah yt-dlp** (mengunduh potongan mentah), atau
    **Unduh JSON**.
 6. Mau satu video highlight dari beberapa momen? Lihat **Kompilasi highlight** di bawah.
+
+Tanpa API key pun bisa: **Impor klip** (lihat di bawah) memakai AI apa saja di luar app.
 7. Mau semua klip jadi MP4 sekaligus? Tekan **Ekspor massal** (lihat di bawah).
 
 Proyek tersimpan otomatis di browser (localStorage).
 
 Transkrip "otomatis" dari YouTube punya waktu per kata yang asli, jadi potongannya paling
 presisi. Subtitle "manual" teksnya lebih rapi tapi waktu per katanya diperkirakan.
+
+## Impor klip dari AI lain (tanpa API key)
+
+AI di app ini hanya membaca transkrip dan memilih momen, jadi langkah itu bisa dikerjakan
+AI mana saja, misalnya ChatGPT, Claude, atau Gemini versi web yang gratis:
+
+1. Tekan **Impor klip**, lalu **Salin prompt** (atau **Unduh .txt** untuk dilampirkan
+   sebagai file). Isinya aturan memilih klip (durasi min/maks, jumlah klip, instruksi
+   tambahan dari Pengaturan) dan transkrip dengan nomor kalimat.
+2. Tempel di chat AI, lalu salin jawabannya ke kotak **Tempel jawabannya**, atau pilih
+   filenya. Teks basa-basi di sekitar JSON tidak masalah. Transkrip yang sangat panjang
+   dibagi jadi beberapa prompt; tempel semua jawabannya sekaligus.
+3. Periksa daftar klip yang terbaca, lalu **Impor**, **Tambahkan**, atau **Ganti semua klip**.
+
+Format yang diterima:
+
+```
+{"clips":[{"start_id":12,"end_id":18,"title":"...","reason":"...","score":80}]}   jawaban prompt tadi
+{"clips":[{"start":83.5,"end":"2:10","title":"..."}]}                            detik atau jam:menit:detik
+1:23 - 2:10 Judul klip                                                            satu klip per baris
+```
+
+File dari **Unduh JSON** juga bisa diimpor ulang. Jawaban yang memakai nomor kalimat
+dirapikan ke kalimat dan durasi min/maks seperti hasil AI di app (bisa dimatikan); waktu
+yang ditulis sendiri dipakai apa adanya, menempel ke batas kata terdekat. Klip di luar
+transkrip dilewati dan alasannya ditampilkan.
 
 ## Pratinjau hasil akhir & ekspor video MP4
 

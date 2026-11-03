@@ -42,6 +42,7 @@
   import TextSearch from '@lucide/svelte/icons/text-search';
   import Trash from '@lucide/svelte/icons/trash-2';
   import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
+  import Upload from '@lucide/svelte/icons/upload';
   import X from '@lucide/svelte/icons/x';
 
   const ICONS = {
@@ -85,6 +86,7 @@
     terminal: Terminal,
     search: TextSearch,
     trash: Trash,
+    upload: Upload,
     warning: TriangleAlert,
     close: X,
   } as const;

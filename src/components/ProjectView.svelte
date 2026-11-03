@@ -3,6 +3,7 @@
   import BulkExportModal from './BulkExportModal.svelte';
   import ClipEditor from './ClipEditor.svelte';
   import ExportModal from './ExportModal.svelte';
+  import ImportModal from './ImportModal.svelte';
   import Icon from './ui/Icon.svelte';
   import Menu from './ui/Menu.svelte';
   import type { Clip, LoadedProject, Settings } from '../lib/types';
@@ -45,6 +46,7 @@
   let compilation = $state<string[]>(untrack(() => initial.compilation ?? []));
   let showCompilation = $state(false);
   let showBulk = $state(false);
+  let showImport = $state(false);
 
   const units = $derived(buildUnits(words));
   const selected = $derived(clips.find((c) => c.id === selectedId) ?? null);
@@ -94,6 +96,19 @@
     clips = clips.filter((c) => c.id !== id);
     compilation = compilation.filter((x) => x !== id);
     if (selectedId === id) selectedId = clips[Math.min(i, clips.length - 1)]?.id ?? null;
+  }
+
+  /** Clips chosen by an AI outside the app (or by hand), pasted in from the import dialog. */
+  function importClips(found: Clip[], mode: 'replace' | 'append') {
+    if (mode === 'replace') {
+      clips = found;
+      compilation = [];
+    } else {
+      clips = [...clips, ...found].sort((a, b) => a.w0 - b.w0);
+    }
+    selectedId = found[0]?.id ?? selectedId;
+    showImport = false;
+    flash(`${found.length} klip diimpor`);
   }
 
   function toggleInCompilation(id: string) {
@@ -300,6 +315,9 @@
         <Icon name="search" />
         {clips.length ? 'Cari ulang dengan AI' : 'Cari klip dengan AI'}
       </button>
+      <button onclick={() => (showImport = true)} title="Tempel klip yang dipilih AI lain (ChatGPT, Claude, Gemini) atau file JSON">
+        <Icon name="upload" /> Impor klip
+      </button>
       <span class="muted">{PROVIDERS[settings.provider].label} · {settings.minSec}–{settings.maxSec} dtk · maks {settings.maxClips} klip</span>
     {/if}
     <span class="spacer"></span>
@@ -413,9 +431,13 @@
       <h2>Transkrip siap</h2>
       <p>
         Tekan <b>Cari klip dengan AI</b> untuk mendapatkan saran potongan, lalu rapikan awal dan akhirnya lewat timeline dan transkrip.
-        Kamu juga bisa membuat klip sendiri.
+        Tidak punya API key? Pakai <b>Impor klip</b>: salin prompt ke ChatGPT, Claude, atau Gemini, lalu tempel jawabannya. Kamu juga
+        bisa membuat klip sendiri.
       </p>
-      <button onclick={addManualClip}><Icon name="plus" /> Tambah klip manual</button>
+      <div class="empty-actions">
+        <button onclick={() => (showImport = true)}><Icon name="upload" /> Impor klip</button>
+        <button onclick={addManualClip}><Icon name="plus" /> Tambah klip manual</button>
+      </div>
     </div>
   {/if}
 
@@ -449,6 +471,18 @@
       {helperOk}
       {helperHealth}
       onclose={() => (showExportModal = false)}
+    />
+  {/if}
+
+  {#if showImport}
+    <ImportModal
+      {words}
+      {units}
+      {settings}
+      videoTitle={meta.video.title}
+      existing={clips.length}
+      onimport={importClips}
+      onclose={() => (showImport = false)}
     />
   {/if}
 
@@ -759,6 +793,12 @@
   .empty h2 {
     margin: 0;
     font-size: 16px;
+  }
+  .empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
   }
   .empty p {
     max-width: 560px;
