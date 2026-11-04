@@ -11,7 +11,7 @@
   let { settings = $bindable(), gamingReady = true, gamingVersion = '' }: Props = $props();
 
   const FORMATS: { value: Settings['aspectRatio']; kind: string; name: string; desc: string }[] = [
-    { value: '9:16_blur', kind: 'blur', name: 'Vertikal, latar blur', desc: 'Video utuh di tengah dengan latar blur. Cocok untuk video apa saja.' },
+    { value: '9:16_blur', kind: 'blur', name: 'Vertikal, latar blur', desc: 'Video di-crop memenuhi 2/3 tengah; latar blur mengisi atas dan bawah.' },
     { value: '9:16_crop', kind: 'crop', name: 'Vertikal, ikuti wajah', desc: 'Penuh layar; kamera otomatis mengikuti wajah.' },
     { value: '9:16_gaming', kind: 'gaming', name: 'Vertikal, mode gamer', desc: 'Gameplay di 2/3 layar, kamera wajah di 1/3 sisanya.' },
     { value: '16:9', kind: 'wide', name: 'Horizontal, asli', desc: 'Format lanskap seperti di YouTube.' },
@@ -118,8 +118,10 @@
     display: block;
   }
   .inner {
+    position: absolute;
+    top: 16.7%;
     width: 100%;
-    height: 12px;
+    height: 66.7%;
     background: var(--ink-5);
   }
   .format.checked .inner,

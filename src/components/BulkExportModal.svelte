@@ -9,6 +9,7 @@
   import {
     checkExportStatus,
     exportZipUrl,
+    BLUR_LAYOUT_HELPER_VERSION,
     GAMING_HELPER_VERSION,
     getExportDownloadUrl,
     startExport,
@@ -53,12 +54,13 @@
   const started = $derived(rows.length > 0);
   const doneRows = $derived(rows.filter((r) => r.state === 'done'));
   const pickedTotal = $derived(scenes.filter((s) => picked.includes(s.id)).reduce((t, s) => t + s.end - s.start, 0));
-  const outdated = $derived(versionBefore(helperHealth?.version, GAMING_HELPER_VERSION));
+  const requiredVersion = $derived(settings.aspectRatio === '9:16_blur' ? BLUR_LAYOUT_HELPER_VERSION : GAMING_HELPER_VERSION);
+  const outdated = $derived(versionBefore(helperHealth?.version, requiredVersion));
   const blocked = $derived(
     !helperOk
       ? `Ekspor massal butuh helper yang berjalan di ${settings.helperUrl}.`
       : outdated
-        ? `Ekspor massal butuh helper versi ${GAMING_HELPER_VERSION} atau lebih baru (sekarang ${helperHealth?.version ?? 'lama'}). Tutup helper, lalu buka lagi lewat launcher AutoClip.`
+        ? `Ekspor massal butuh helper versi ${requiredVersion} atau lebih baru (sekarang ${helperHealth?.version ?? 'lama'}). Tutup helper, lalu buka lagi lewat launcher AutoClip.`
         : !helperHealth?.ffmpeg
           ? 'Ekspor butuh FFmpeg di komputer ini (Mac: brew install ffmpeg, Windows: winget install ffmpeg).'
           : '',

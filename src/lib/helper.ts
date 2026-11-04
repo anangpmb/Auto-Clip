@@ -24,6 +24,8 @@ export const PREVIEW_HELPER_VERSION = '0.4.0';
 export const COMPILATION_HELPER_VERSION = '0.5.0';
 /** Oldest helper with gamer mode and the zip of a bulk export. */
 export const GAMING_HELPER_VERSION = '0.6.0';
+/** Oldest helper that crops the foreground to the centred two-thirds in blur format. */
+export const BLUR_LAYOUT_HELPER_VERSION = '0.6.1';
 
 /** True when version a is older than b (dotted numbers). */
 export function versionBefore(a: string | undefined, b: string): boolean {

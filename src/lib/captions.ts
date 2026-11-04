@@ -330,7 +330,7 @@ export function buildExportCommand(
 
   let filter = '';
   if (aspectRatio === '9:16_blur') {
-    filter = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[0:v]scale=1080:1920:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2`;
+    filter = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[0:v]scale=1080:1280:force_original_aspect_ratio=increase,crop=1080:1280[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2`;
     if (burnCaptions) filter += `,subtitles='${srtName}'`;
   } else if (aspectRatio === '9:16_crop') {
     filter = `crop=ih*9/16:ih,scale=1080:1920`;
@@ -348,4 +348,3 @@ export function buildExportCommand(
     `rm "raw_${outName}"`
   );
 }
-

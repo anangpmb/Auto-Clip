@@ -504,6 +504,12 @@
     filter: blur(3cqw);
     transform: scale(1.15);
   }
+  .media.blur {
+    inset: 16.6667% 0 auto;
+    width: 100%;
+    height: 66.6667%;
+    object-fit: cover;
+  }
   .hit {
     position: absolute;
     inset: 0;

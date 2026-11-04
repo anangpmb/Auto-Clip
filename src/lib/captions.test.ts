@@ -132,7 +132,7 @@ describe('buildExportCommand', () => {
     expect(cmd).toContain('yt-dlp --download-sections "*10.00-25.50"');
     expect(cmd).toContain('Momen_Lucu.mp4');
     expect(cmd).toContain('boxblur');
+    expect(cmd).toContain('scale=1080:1280:force_original_aspect_ratio=increase,crop=1080:1280');
     expect(cmd).toContain('subtitles=');
   });
 });
-

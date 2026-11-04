@@ -129,9 +129,12 @@ transkrip dilewati dan alasannya ditampilkan.
 Tombol **Pratinjau Hasil Akhir & Ekspor** membuka pratinjau video jadi sebelum dirender.
 Helper mengambil salinan ringan klip (480p, biasanya beberapa detik), lalu web app
 menampilkannya persis seperti hasil ekspor: format 9:16 blur / ikuti wajah / 16:9, kamera
-yang mengikuti wajah, dan caption dengan ukuran serta posisi yang sama. Ganti format atau
+yang mengikuti wajah, dan caption dengan ukuran serta posisi yang sama. Pada format latar
+blur, video utama di-crop memenuhi 2/3 tengah layar; latar blur mengisi 1/6 bagian atas dan
+bawah. Ganti format atau
 gaya caption, pratinjaunya langsung berubah. Jalur wajah dari pratinjau dipakai ulang
-saat ekspor, jadi hasilnya sama dan ekspor lebih cepat. Butuh helper 0.4.0 atau lebih baru.
+saat ekspor, jadi hasilnya sama dan ekspor lebih cepat. Butuh helper 0.4.0 atau lebih baru;
+tata letak blur terbaru memerlukan helper 0.6.1 atau lebih baru.
 
 Saat **Mulai Render Video**, helper:
 

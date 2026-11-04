@@ -11,6 +11,7 @@
   import { fmtDuration, fmtTime } from '../lib/transcript';
   import {
     checkExportStatus,
+    BLUR_LAYOUT_HELPER_VERSION,
     COMPILATION_HELPER_VERSION,
     EXPORT_HELPER_VERSION,
     GAMING_HELPER_VERSION,
@@ -89,9 +90,23 @@
   let previewId = $state('');
   const gamingReady = $derived(!versionBefore(helperHealth?.version, GAMING_HELPER_VERSION));
   const previewVersion = $derived(
-    gamingMode ? GAMING_HELPER_VERSION : many ? COMPILATION_HELPER_VERSION : PREVIEW_HELPER_VERSION,
+    gamingMode
+      ? GAMING_HELPER_VERSION
+      : aspectRatio === '9:16_blur'
+        ? BLUR_LAYOUT_HELPER_VERSION
+        : many
+          ? COMPILATION_HELPER_VERSION
+          : PREVIEW_HELPER_VERSION,
   );
-  const exportVersion = $derived(gamingMode ? GAMING_HELPER_VERSION : many ? COMPILATION_HELPER_VERSION : EXPORT_HELPER_VERSION);
+  const exportVersion = $derived(
+    gamingMode
+      ? GAMING_HELPER_VERSION
+      : aspectRatio === '9:16_blur'
+        ? BLUR_LAYOUT_HELPER_VERSION
+        : many
+          ? COMPILATION_HELPER_VERSION
+          : EXPORT_HELPER_VERSION,
+  );
   const tooLongText = 'Total kompilasi lebih dari 10 menit. Keluarkan atau pendekkan beberapa adegan.';
   const what = $derived(gamingMode ? 'Mode gamer' : many ? 'Kompilasi' : 'Pratinjau');
   const previewBlocked = $derived(

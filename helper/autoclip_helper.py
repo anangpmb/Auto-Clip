@@ -40,7 +40,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlparse
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 DEFAULT_PORT = 8765
 DEV_ORIGINS = {
     "http://localhost:5173",
@@ -1304,11 +1304,13 @@ def layout_graph(src: str, out: str, layout: str, ih: int, crop_w: int, crop_exp
         return f"{src}crop=w={crop_w}:h={ih}:x='{crop_expr}':y=0,scale={out_w}:{out_h},setsar=1{out}"
     if layout == "blur":
         bw, bh = out_w // 4, out_h // 4
+        fg_h = out_h * 2 // 3
         return (
             f"{src}split=2[a{tag}][b{tag}];"
             f"[a{tag}]scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},"
             f"boxblur=10:2,scale={out_w}:{out_h}[bg{tag}];"
-            f"[b{tag}]scale={out_w}:{out_h}:force_original_aspect_ratio=decrease[fg{tag}];"
+            f"[b{tag}]scale={out_w}:{fg_h}:force_original_aspect_ratio=increase,"
+            f"crop={out_w}:{fg_h}[fg{tag}];"
             f"[bg{tag}][fg{tag}]overlay=(W-w)/2:(H-h)/2,setsar=1{out}"
         )
     if layout == "fit":
