@@ -87,8 +87,7 @@
   }
 
   function updateClip(c: Clip) {
-    const i = clips.findIndex((x) => x.id === c.id);
-    if (i >= 0) clips[i] = c;
+    clips = clips.map((x) => (x.id === c.id ? c : x));
   }
 
   function updateWord(wi: number, text: string) {

@@ -22,6 +22,8 @@ export interface Clip {
   title: string;
   reason: string;
   score: number;
+  /** Editable hook text used when generating a thumbnail. */
+  thumbnailHook?: string;
   /** Inclusive word range currently used for the clip. */
   w0: number;
   w1: number;

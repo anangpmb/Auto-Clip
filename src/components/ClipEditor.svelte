@@ -5,6 +5,7 @@
   import TranscriptPane from './TranscriptPane.svelte';
   import CaptionOverlay from './CaptionOverlay.svelte';
   import ExportModal from './ExportModal.svelte';
+  import ThumbnailModal from './ThumbnailModal.svelte';
   import Icon from './ui/Icon.svelte';
   import Segmented from './ui/Segmented.svelte';
   import Switch from './ui/Switch.svelte';
@@ -58,6 +59,7 @@
   let playing = $state(false);
   let viewFor = '';
   let showExportModal = $state(false);
+  let showThumbnailModal = $state(false);
 
   // Mini player: when the preview has been used and the user scrolls it out of view
   // (e.g. to edit the transcript), it floats in the corner instead of disappearing.
@@ -228,6 +230,9 @@
       >
         <Icon name="clapperboard" /> Pratinjau hasil akhir & ekspor
       </button>
+      <button class="thumbnail-btn" onclick={() => (showThumbnailModal = true)}>
+        <Icon name="film" /> Buat thumbnail
+      </button>
 
       <div class="caption-bar">
         <Switch bind:checked={settings.captionEnabled}><Icon name="captions" size={14} /> Caption</Switch>
@@ -332,6 +337,21 @@
       helperOk={helperOk ?? false}
       helperHealth={helperHealth ?? null}
       onclose={() => (showExportModal = false)}
+    />
+  {/if}
+
+  {#if showThumbnailModal}
+    <ThumbnailModal
+      helperUrl={settings.helperUrl}
+      {helperOk}
+      {helperHealth}
+      videoUrl={videoUrl || `https://www.youtube.com/watch?v=${videoId}`}
+      start={bounds.start}
+      end={bounds.end}
+      clipTitle={clip.title}
+      initialHook={clip.thumbnailHook || clip.title}
+      onhookchange={(text) => onchange({ ...clip, thumbnailHook: text })}
+      onclose={() => (showThumbnailModal = false)}
     />
   {/if}
 </div>
@@ -472,6 +492,11 @@
     justify-content: center;
     width: 100%;
     min-height: 38px;
+  }
+  .thumbnail-btn {
+    justify-content: center;
+    width: 100%;
+    min-height: 36px;
   }
   .caption-bar {
     display: grid;
