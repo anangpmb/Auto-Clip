@@ -460,7 +460,7 @@
     z-index: 30;
     display: grid;
     padding: 6px;
-    background: var(--raised);
+    background: #000000f5;
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-satellite);
     line-height: 1.3;
