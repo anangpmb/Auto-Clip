@@ -27,18 +27,19 @@ Pick segments that work as standalone vertical short videos (TikTok, Reels, Shor
 
 Rules:
 1. Length: every clip must last between ${s.minSec} and ${s.maxSec} seconds in total. Aim for about ${target} seconds.
-2. Context: a viewer who has not seen the full video must understand the clip. Include the setup or question the moment depends on.
-3. Clean start: begin on a unit that opens a new thought, question or story. Never begin mid-argument or on a connector (and, but, so, because, then, dan, tapi, jadi, karena, terus, nah).
-4. Clean ending: end on the unit that completes the thought: the answer, punchline, conclusion or reaction. If the next unit still continues the same sentence or idea, include it or end earlier at a complete point.
-5. Each clip covers a different moment. Small overlaps at the edges are fine.
-6. Skip ads, sponsor reads, intros, outros and requests to like or subscribe.
-7. Prefer moments with a strong hook in the first seconds: a bold claim, a question, a surprise, humour, conflict or emotion.
+2. Clip count: return no more than ${maxClips} clips. Return fewer if fewer moments qualify.
+3. Context: a viewer who has not seen the full video must understand the clip. Include the setup or question the moment depends on.
+4. Clean start: begin on a unit that opens a new thought, question or story. Never begin mid-argument or on a connector (and, but, so, because, then, dan, tapi, jadi, karena, terus, nah).
+5. Clean ending: end on the unit that completes the thought: the answer, punchline, conclusion or reaction. If the next unit still continues the same sentence or idea, include it or end earlier at a complete point.
+6. Each clip covers a different moment. Small overlaps at the edges are fine.
+7. Skip ads, sponsor reads, intros, outros and requests to like or subscribe.
+8. Prefer moments with a strong hook in the first seconds: a bold claim, a question, a surprise, humour, conflict or emotion.
 
 Write "title" and "reason" in the same language as the transcript. title: at most 70 characters, catchy, no hashtags. reason: one short sentence on why the moment works. score: 1-100 for viral potential; be critical.
 
 Return JSON only, in this shape:
 {"clips":[{"start_id":0,"end_id":0,"title":"","reason":"","score":0}]}
-Return at most ${maxClips} clips, best first, or {"clips":[]} if nothing qualifies.`;
+Return the selected clips best first, or {"clips":[]} if nothing qualifies.`;
   if (s.instructions.trim()) prompt += `\n\nExtra instructions from the user:\n${s.instructions.trim()}`;
   return prompt;
 }

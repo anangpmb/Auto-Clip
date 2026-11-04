@@ -23,6 +23,7 @@
     onplay: (wi: number) => void;
     onseek: (t: number) => void;
     onexpand: (dir: -1 | 1) => void;
+    onwordedit: (wi: number, text: string) => void;
   }
   let {
     words,
@@ -41,10 +42,11 @@
     onplay,
     onseek,
     onexpand,
+    onwordedit,
   }: Props = $props();
 
   const MENU_W = 240;
-  const MENU_H = 215;
+  const MENU_H = 300;
 
   /** How long following stays paused after the user scrolls the transcript themselves. */
   const FOLLOW_RESUME_MS = 6000;
@@ -52,6 +54,9 @@
   let box: HTMLDivElement;
   let drag = $state<Edge | null>(null);
   let menu = $state<{ wi: number; x: number; y: number } | null>(null);
+  let editingWord = $state(false);
+  let wordDraft = $state('');
+  let editInput = $state<HTMLInputElement>();
   /** True while the user is reading elsewhere in the transcript during playback. */
   let followPaused = $state(false);
   let resumeTimer = 0;
@@ -102,6 +107,7 @@
       x: Math.min(Math.max(8, r.left), window.innerWidth - MENU_W - 8),
       y: below + MENU_H > window.innerHeight - 8 ? Math.max(8, r.top - MENU_H - 4) : below,
     };
+    editingWord = false;
   }
 
   function applyDrag(edge: Edge, wi: number) {
@@ -236,6 +242,23 @@
     action();
     menu = null;
   }
+
+  async function beginWordEdit() {
+    if (!menu) return;
+    wordDraft = words[menu.wi].t;
+    editingWord = true;
+    await tick();
+    editInput?.focus();
+    editInput?.select();
+  }
+
+  function saveWordEdit() {
+    const text = wordDraft.trim();
+    if (!menu || !text) return;
+    onwordedit(menu.wi, text);
+    menu = null;
+    editingWord = false;
+  }
 </script>
 
 <div class="pane" class:dragging={drag} bind:this={box}>
@@ -268,12 +291,30 @@
     {@const wi = menu.wi}
     {@const u = units[unitIndexOfWord(units, wi)]}
     <div class="menu" style:left="{menu.x}px" style:top="{menu.y}px" style:width="{MENU_W}px">
-      <div class="menu-title">“{words[wi].t}” · {fmtTime(words[wi].s, true)}</div>
-      <button onclick={() => pick(() => onstart(Math.min(wi, w1), false))} disabled={wi > w1}>Mulai dari kata ini</button>
-      <button onclick={() => pick(() => onend(Math.max(wi, w0), false))} disabled={wi < w0}>Akhiri di kata ini</button>
-      <button onclick={() => pick(() => onstart(Math.min(u.w0, w1), false))} disabled={u.w0 > w1}>Mulai dari awal kalimat ini</button>
-      <button onclick={() => pick(() => onend(Math.max(u.w1, w0), false))} disabled={u.w1 < w0}>Akhiri di akhir kalimat ini</button>
-      <button onclick={() => pick(() => onplay(wi))}><Icon name="play" size={14} /> Putar dari sini</button>
+      {#if editingWord}
+        <form class="word-edit" onsubmit={(e) => { e.preventDefault(); saveWordEdit(); }}>
+          <label for="transcript-word-edit">Koreksi kata · {fmtTime(words[wi].s, true)}</label>
+          <input
+            id="transcript-word-edit"
+            bind:this={editInput}
+            bind:value={wordDraft}
+            aria-label="Koreksi kata transkrip"
+            onkeydown={(e) => { if (e.key === 'Escape') { e.preventDefault(); editingWord = false; } }}
+          />
+          <div class="word-edit-actions">
+            <button type="button" onclick={() => (editingWord = false)}>Batal</button>
+            <button type="submit" disabled={!wordDraft.trim()}>Simpan</button>
+          </div>
+        </form>
+      {:else}
+        <div class="menu-title">“{words[wi].t}” · {fmtTime(words[wi].s, true)}</div>
+        <button onclick={beginWordEdit}><Icon name="edit" size={14} /> Koreksi kata</button>
+        <button onclick={() => pick(() => onstart(Math.min(wi, w1), false))} disabled={wi > w1}>Mulai dari kata ini</button>
+        <button onclick={() => pick(() => onend(Math.max(wi, w0), false))} disabled={wi < w0}>Akhiri di kata ini</button>
+        <button onclick={() => pick(() => onstart(Math.min(u.w0, w1), false))} disabled={u.w0 > w1}>Mulai dari awal kalimat ini</button>
+        <button onclick={() => pick(() => onend(Math.max(u.w1, w0), false))} disabled={u.w1 < w0}>Akhiri di akhir kalimat ini</button>
+        <button onclick={() => pick(() => onplay(wi))}><Icon name="play" size={14} /> Putar dari sini</button>
+      {/if}
     </div>
   {/if}
 </div>
@@ -445,5 +486,27 @@
   }
   .menu button:disabled {
     opacity: 0.35;
+  }
+  .word-edit {
+    display: grid;
+    gap: 8px;
+    padding: 4px;
+  }
+  .word-edit label {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .word-edit input {
+    width: 100%;
+    min-width: 0;
+  }
+  .word-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+  .word-edit-actions button:last-child {
+    color: var(--accent);
+    font-weight: 600;
   }
 </style>

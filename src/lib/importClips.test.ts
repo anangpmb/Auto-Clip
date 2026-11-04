@@ -97,6 +97,7 @@ it('builds one prompt with the rules, the title and the numbered transcript', ()
   const [p, ...rest] = externalPrompts(units, DEFAULT_SETTINGS, 'Judul video');
   expect(rest).toEqual([]);
   expect(p).toContain('Video title: Judul video');
+  expect(p).toContain(`Clip count: return no more than ${DEFAULT_SETTINGS.maxClips} clips.`);
   expect(p).toContain('[19] 3:10');
   expect(p).toContain('"start_id"');
   expect(p.trim().endsWith('Reply with the JSON only.')).toBe(true);

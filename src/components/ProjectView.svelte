@@ -91,6 +91,17 @@
     if (i >= 0) clips[i] = c;
   }
 
+  function updateWord(wi: number, text: string) {
+    words = words.map((word, i) => (i === wi ? { ...word, t: text } : word));
+    try {
+      saveWords(meta.id, words);
+      saveProject(meta, clips, compilation);
+      flash('Kata transkrip diperbarui');
+    } catch (e) {
+      flash((e as Error).message);
+    }
+  }
+
   function deleteClip(id: string) {
     const i = clips.findIndex((c) => c.id === id);
     clips = clips.filter((c) => c.id !== id);
@@ -418,6 +429,7 @@
             {helperOk}
             {helperHealth}
             onchange={updateClip}
+            onwordedit={updateWord}
             ontime={(t) => (playerTime = t)}
           />
         {:else}

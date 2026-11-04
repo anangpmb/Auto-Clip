@@ -32,6 +32,7 @@
     helperOk?: boolean;
     helperHealth?: HelperHealth | null;
     onchange: (clip: Clip) => void;
+    onwordedit: (wi: number, text: string) => void;
     ontime?: (t: number) => void;
   }
   let {
@@ -45,6 +46,7 @@
     helperOk = false,
     helperHealth = null,
     onchange,
+    onwordedit,
     ontime,
   }: Props = $props();
 
@@ -311,6 +313,7 @@
     onplay={playFromWord}
     onseek={seek}
     onexpand={expand}
+    {onwordedit}
   />
 
   {#if floating}
