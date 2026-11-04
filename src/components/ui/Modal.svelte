@@ -53,10 +53,15 @@
     max-height: min(92vh, 1000px);
     padding: 0;
     border: 0;
-    border-radius: var(--radius-xl);
-    background: var(--panel);
+    border-radius: var(--radius-2xl);
+    background: var(--glass-float);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     color: var(--text);
-    box-shadow: var(--shadow-float);
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.14),
+      var(--shadow-float),
+      inset 0 1px 0 rgba(255, 255, 255, 0.16);
     overflow: hidden;
   }
   .modal[open] {
@@ -65,8 +70,10 @@
     animation: modal-in 0.22s cubic-bezier(0.22, 1, 0.36, 1);
   }
   .modal::backdrop {
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(3px);
+    background:
+      radial-gradient(80% 60% at 50% 0%, rgba(255, 110, 30, 0.16), transparent 70%),
+      rgba(12, 9, 8, 0.62);
+    backdrop-filter: blur(10px);
   }
   .modal-head {
     display: flex;

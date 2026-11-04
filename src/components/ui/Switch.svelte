@@ -61,7 +61,8 @@
     transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
   }
   input:checked + .track {
-    background: var(--accent);
+    background: var(--accent-grad);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
   }
   input:checked + .track .knob {
     transform: translateX(12px);

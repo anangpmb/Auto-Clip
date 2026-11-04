@@ -74,15 +74,20 @@
   }
   .pop {
     position: absolute;
-    top: calc(100% + 6px);
+    top: calc(100% + 8px);
     right: 0;
     z-index: 30;
     display: grid;
     min-width: 230px;
-    padding: 4px;
-    border-radius: var(--radius-lg);
-    background: var(--raised);
-    box-shadow: var(--shadow-satellite);
+    padding: 6px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-xl);
+    background: var(--glass-float);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    box-shadow:
+      var(--shadow-float),
+      inset 0 1px 0 rgba(255, 255, 255, 0.16);
     animation: pop-in 0.14s ease-out;
   }
   .pop button {
@@ -96,8 +101,13 @@
   }
   .pop button:hover:not(:disabled),
   .pop button:focus-visible {
-    background: var(--ink-3);
+    background: var(--accent-wash);
+    color: var(--text);
     outline: none;
+  }
+  .pop button:hover:not(:disabled) :global(.icon),
+  .pop button:focus-visible :global(.icon) {
+    color: var(--accent-text);
   }
   @keyframes pop-in {
     from {

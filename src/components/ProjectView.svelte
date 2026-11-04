@@ -533,7 +533,9 @@
     width: 88px;
     aspect-ratio: 16 / 9;
     object-fit: cover;
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
+    background: var(--field);
   }
   .info {
     flex: 1;
@@ -585,26 +587,48 @@
   }
   .list {
     display: grid;
-    gap: 6px;
+    gap: 8px;
     position: sticky;
-    top: 70px;
-    max-height: calc(100vh - 90px);
+    /* Clears the floating header: 12px offset + ~60px bar + breathing room. */
+    top: 92px;
+    max-height: calc(100vh - 112px);
     overflow-y: auto;
     padding-right: 4px;
   }
   .item {
     position: relative;
     display: flex;
+    border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    background: var(--panel);
-    transition: background-color 0.15s;
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    transition:
+      background-color 0.18s var(--ease),
+      border-color 0.18s var(--ease),
+      box-shadow 0.18s var(--ease);
   }
   .item:hover {
-    background: var(--panel-2);
+    background: rgba(255, 255, 255, 0.075);
+    border-color: var(--border-strong);
   }
   .item.active {
-    background: var(--panel-2);
-    box-shadow: inset 0 0 0 1px var(--accent);
+    background: var(--accent-wash);
+    border-color: var(--accent-line);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.1),
+      0 0 24px -14px rgba(249, 115, 22, 0.8);
+  }
+  /* A lit bar on the left edge marks the clip being edited. */
+  .item.active::before {
+    content: '';
+    position: absolute;
+    top: 12px;
+    bottom: 12px;
+    left: 0;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--accent-grad);
+    box-shadow: 0 0 12px rgba(249, 115, 22, 0.75);
   }
   .pick {
     flex: 1;
@@ -708,27 +732,34 @@
     color: var(--text);
   }
   .in-comp.on {
-    border: 1px solid var(--accent);
-    background: var(--accent);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: var(--accent-grad);
     color: #fff;
+    box-shadow:
+      var(--glow-accent),
+      inset 0 1px 0 rgba(255, 255, 255, 0.26);
   }
   .in-comp.on :global(.icon) {
     color: currentColor;
   }
   .in-comp.on:hover:not(:disabled) {
-    background: var(--accent-hover);
+    background: linear-gradient(135deg, #ffab63, #ff7018);
   }
   .comp {
     display: grid;
     gap: 10px;
     padding: 12px;
+    border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    background: var(--panel);
-    box-shadow: inset 0 0 0 1px var(--border);
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   }
   .comp.filled {
-    background: var(--accent-soft);
-    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.45);
+    background: var(--accent-wash);
+    border-color: var(--accent-line);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.1),
+      0 0 30px -18px rgba(249, 115, 22, 0.9);
   }
   .comp-head {
     display: flex;
@@ -786,8 +817,10 @@
   .panel {
     min-width: 0;
     padding: 18px;
+    border: 1px solid var(--border);
     border-radius: var(--radius-xl);
-    background: var(--panel);
+    background: var(--glass-fill);
+    box-shadow: var(--shadow-glass);
   }
   .empty {
     display: grid;
@@ -795,8 +828,10 @@
     gap: 8px;
     padding: 44px 20px;
     text-align: center;
+    border: 1px solid var(--border);
     border-radius: var(--radius-xl);
-    background: var(--panel);
+    background: var(--glass-fill);
+    box-shadow: var(--shadow-glass);
   }
   .empty > :global(.icon) {
     color: var(--icon);
@@ -825,10 +860,15 @@
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 14px;
-    border-radius: var(--radius-lg);
-    background: var(--raised);
-    box-shadow: var(--shadow-satellite);
+    padding: 9px 15px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--glass-float);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    box-shadow:
+      var(--shadow-float),
+      inset 0 1px 0 rgba(255, 255, 255, 0.16);
     font-size: 13px;
     z-index: 20;
   }

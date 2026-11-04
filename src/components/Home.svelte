@@ -35,6 +35,16 @@
   const installMac = `curl -fsSL ${appUrl}install-mac.sh | bash -s ${appUrl}`;
   const localUrl = $derived(`${settings.helperUrl.trim().replace(/\/+$/, '')}/`);
   const rejected = $derived(health?.error === 'origin_not_allowed');
+  // The hero strip counts what is already saved here; nothing is invented.
+  const totalClips = $derived(recent.reduce((n, p) => n + p.clipCount, 0));
+  const lastSaved = $derived(
+    recent.length
+      ? new Date(Math.max(...recent.map((p) => Date.parse(p.updatedAt)))).toLocaleDateString('id-ID', {
+          day: 'numeric',
+          month: 'short',
+        })
+      : '',
+  );
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
@@ -90,6 +100,7 @@
 
 <section class="home">
   <div class="hero">
+    <span class="eyebrow"><Icon name="scissors" size={13} /> Pemotong klip bertenaga AI</span>
     <h1>Potong video YouTube jadi klip pendek</h1>
     <p>Tempel link video. AI memilih momen terbaik, lalu kamu rapikan awal dan akhir tiap klip berdasarkan transkrip.</p>
     <form onsubmit={submit}>
@@ -107,6 +118,13 @@
       </button>
     </form>
     {#if error}<div class="notice bad form-error"><Icon name="alert" /><span>{error}</span></div>{/if}
+    {#if recent.length}
+      <div class="stats">
+        <div class="stat"><b>{recent.length}</b><span>Proyek</span></div>
+        <div class="stat"><b>{totalClips}</b><span>Klip</span></div>
+        <div class="stat"><b>{lastSaved}</b><span>Terakhir disimpan</span></div>
+      </div>
+    {/if}
   </div>
 
   {#if !checking && !health?.ok}
@@ -212,42 +230,132 @@
 <style>
   .home {
     display: grid;
-    gap: 28px;
-    max-width: 980px;
+    gap: 26px;
+    max-width: 1000px;
     margin: 0 auto;
   }
+  /* The hero is one big pane of glass with orange light pooled behind the headline. */
   .hero {
+    position: relative;
+    isolation: isolate;
     display: grid;
-    gap: 12px;
-    padding: 36px 0 8px;
+    justify-items: center;
+    gap: 14px;
+    padding: 46px 30px 30px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-2xl);
+    background: var(--glass-fill);
+    box-shadow: var(--shadow-glass);
+    overflow: hidden;
     text-align: center;
+  }
+  /* Light pools at the top of the pane and falls away down it. */
+  .hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: radial-gradient(
+      780px 480px at 50% -10%,
+      rgba(255, 132, 46, 0.5),
+      rgba(255, 96, 16, 0.16) 56%,
+      transparent 78%
+    );
+    pointer-events: none;
+  }
+  /* A specular sheen along the top edge, like light catching the rim of the glass. */
+  .hero::after {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto;
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 176, 120, 0.55) 32%,
+      rgba(255, 255, 255, 0.8) 50%,
+      rgba(255, 176, 120, 0.55) 68%,
+      transparent
+    );
+    opacity: 0.7;
+    pointer-events: none;
+  }
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px 5px 10px;
+    border: 1px solid rgba(249, 115, 22, 0.34);
+    border-radius: 999px;
+    background: rgba(249, 115, 22, 0.12);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    color: var(--accent-text);
+    font-size: 11.5px;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
   }
   h1 {
     margin: 0;
-    font-size: clamp(24px, 3.6vw, 34px);
-    font-weight: 650;
-    letter-spacing: -0.02em;
-    line-height: 1.2;
+    max-width: 22ch;
+    color: #fff;
+    font-size: clamp(30px, 4.8vw, 46px);
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1.08;
   }
   .hero p {
     margin: 0 auto;
-    max-width: 620px;
+    max-width: 60ch;
     color: var(--muted);
+    font-size: 15px;
+    line-height: 1.6;
+    text-wrap: pretty;
   }
+  /* The URL field and its button share one glass capsule. */
   form {
     display: flex;
+    align-items: center;
     gap: 8px;
     max-width: 720px;
     width: 100%;
-    margin: 10px auto 0;
+    margin: 12px auto 0;
+    padding: 6px 6px 6px 16px;
+    border: 1px solid var(--border-strong);
+    border-radius: 18px;
+    background: linear-gradient(150deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.035));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.16),
+      0 26px 60px -34px rgba(0, 0, 0, 0.95);
+    backdrop-filter: blur(10px);
+    transition:
+      border-color 0.18s var(--ease),
+      box-shadow 0.18s var(--ease);
+  }
+  form:focus-within {
+    border-color: var(--accent);
+    box-shadow:
+      0 0 0 3px var(--accent-soft),
+      inset 0 1px 0 rgba(255, 255, 255, 0.16);
   }
   form input {
     flex: 1;
-    padding: 9px 14px;
-    font-size: 14px;
+    min-width: 0;
+    padding: 8px 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    font-size: 14.5px;
+    text-align: left;
+  }
+  form input:focus {
+    border-color: transparent;
+    box-shadow: none;
   }
   form button {
-    padding-inline: 16px;
+    flex: none;
+    padding: 8px 18px;
+    border-radius: 13px;
   }
   .form-error {
     max-width: 720px;
@@ -255,10 +363,47 @@
     margin: 0 auto;
     text-align: left;
   }
-  .setup {
-    padding: 20px 22px;
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    max-width: 720px;
+    margin: 18px auto 0;
+    padding: 14px 6px;
+    border: 1px solid var(--border);
     border-radius: var(--radius-xl);
-    background: var(--panel);
+    background: rgba(255, 255, 255, 0.07);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      0 20px 40px -34px rgba(0, 0, 0, 0.9);
+    backdrop-filter: blur(12px);
+  }
+  .stat {
+    display: grid;
+    justify-items: center;
+    gap: 2px;
+    padding: 0 8px;
+  }
+  .stat + .stat {
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .stat b {
+    color: #fff;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat span {
+    color: var(--muted);
+    font-size: 11.5px;
+  }
+  .setup {
+    padding: 22px 24px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    background: var(--glass-fill);
+    box-shadow: var(--shadow-glass);
   }
   .setup h2 {
     display: flex;
@@ -276,6 +421,7 @@
     padding: 12px 14px;
     border-radius: var(--radius-md);
     background: var(--bad-soft);
+    box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.24);
   }
   .browser-issue h2 :global(.icon) {
     color: var(--bad-text);
@@ -300,8 +446,10 @@
     gap: 8px;
     margin: 10px 0;
     padding: 6px 6px 6px 12px;
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--field);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
     overflow-x: auto;
   }
   .cmd code {
@@ -322,9 +470,21 @@
     color: var(--muted);
   }
   .recent h2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 12px;
     font-size: 14px;
     font-weight: 600;
-    margin: 0 0 10px;
+    letter-spacing: 0.01em;
+  }
+  .recent h2::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 10px rgba(249, 115, 22, 0.9);
   }
   .grid {
     display: grid;
@@ -333,13 +493,25 @@
   }
   .card {
     position: relative;
-    border-radius: var(--radius-lg);
-    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+    background: var(--glass-fill);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      0 22px 44px -34px rgba(0, 0, 0, 0.95);
     overflow: hidden;
-    transition: background-color 0.15s;
+    transition:
+      transform 0.3s var(--ease),
+      border-color 0.3s var(--ease),
+      box-shadow 0.3s var(--ease);
   }
   .card:hover {
-    background: var(--panel-2);
+    transform: translateY(-3px);
+    border-color: var(--accent-line);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.16),
+      0 28px 56px -30px rgba(0, 0, 0, 0.95),
+      0 0 26px -10px rgba(249, 115, 22, 0.45);
   }
   .open {
     display: grid;
@@ -363,9 +535,18 @@
     aspect-ratio: 16 / 9;
     object-fit: cover;
     background: var(--panel-2);
+    opacity: 0.94;
+    transition:
+      transform 0.5s var(--ease),
+      opacity 0.3s var(--ease);
+  }
+  .card:hover .open img {
+    transform: scale(1.035);
+    opacity: 1;
   }
   .open .t {
-    padding: 0 10px;
+    margin-top: 10px;
+    padding: 0 12px;
     font-weight: 600;
     font-size: 14px;
     display: -webkit-box;
@@ -375,18 +556,21 @@
     overflow: hidden;
   }
   .open .sub {
-    padding: 0 10px;
+    padding: 0 12px;
     font-size: 12px;
     color: var(--muted);
   }
   .del {
     position: absolute;
-    top: 6px;
-    right: 6px;
-    border: none;
-    background: rgba(0, 0, 0, 0.65);
+    top: 8px;
+    right: 8px;
+    border: 1px solid var(--border);
+    background: rgba(15, 10, 8, 0.72);
+    backdrop-filter: blur(8px);
     opacity: 0;
-    transition: opacity 0.15s;
+    transition:
+      opacity 0.18s var(--ease),
+      background-color 0.18s var(--ease);
   }
   .card:hover .del,
   .del:focus-visible {
@@ -404,8 +588,44 @@
     }
   }
   @media (max-width: 640px) {
+    .hero {
+      padding: 34px 18px 22px;
+      gap: 12px;
+      border-radius: var(--radius-xl);
+    }
+    .hero p {
+      font-size: 14px;
+    }
     form {
       flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
+      padding: 8px;
+      border-radius: 16px;
+    }
+    form input {
+      padding: 8px 6px;
+    }
+    form button {
+      justify-content: center;
+      padding: 9px 14px;
+    }
+    .stats {
+      padding: 12px 2px;
+    }
+    .stat b {
+      font-size: 19px;
+    }
+    .setup {
+      padding: 18px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .card,
+    .card:hover,
+    .card:hover .open img {
+      transform: none;
+      transition: none;
     }
   }
 </style>

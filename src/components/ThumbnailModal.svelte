@@ -348,8 +348,9 @@
     width: 100%;
     max-height: min(66vh, 680px);
     aspect-ratio: 9 / 16;
+    border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    background: #080808;
+    background: #0a0809;
   }
   canvas {
     display: block;
@@ -387,6 +388,7 @@
     grid-template-columns: 1fr 1fr;
     gap: 4px;
     padding: 4px;
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--field);
   }

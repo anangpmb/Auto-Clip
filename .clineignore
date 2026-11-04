@@ -1,0 +1,8 @@
+node_modules/
+.git/
+build/
+dist/
+.dart_tool/
+*.log
+package-lock.json
+yarn.lock

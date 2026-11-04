@@ -393,10 +393,10 @@
   }
   .unit.inside {
     border-left-color: var(--accent);
-    background: rgba(59, 130, 246, 0.07);
+    background: var(--accent-wash);
   }
   .unit.partial {
-    border-left-color: rgba(59, 130, 246, 0.45);
+    border-left-color: var(--accent-line);
   }
   .ts {
     align-self: start;
@@ -429,8 +429,9 @@
     color: var(--text);
   }
   .w.cur {
-    background: rgba(59, 130, 246, 0.45);
+    background: rgba(249, 115, 22, 0.55);
     color: #fff;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
   }
   .mark {
     display: inline-block;

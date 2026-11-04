@@ -199,6 +199,7 @@
   .lane {
     position: relative;
     height: 56px;
+    border: 1px solid var(--border);
     background: var(--panel-2);
     border-radius: 8px;
     overflow: visible;
@@ -254,7 +255,10 @@
     width: 14px;
     margin-left: -7px;
     border-radius: 4px;
-    background: var(--accent);
+    background: var(--accent-grad);
+    box-shadow:
+      0 0 14px rgba(249, 115, 22, 0.6),
+      inset 0 1px 0 rgba(255, 255, 255, 0.3);
     cursor: ew-resize;
     z-index: 2;
     outline-offset: 2px;

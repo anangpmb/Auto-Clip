@@ -213,9 +213,12 @@ npm run check    # cek tipe Svelte/TypeScript
 npm run build    # hasil di dist/
 ```
 
-Tampilan mengikuti tampilan gelap kit [stageshow](https://github.com/benjitaylor/skills):
-satu keluarga abu-abu netral, satu warna aksen, warna status hanya untuk status. Token ada
-di `src/app.css`; komponen dasar (ikon, switch, segmented, dialog, menu) di
+Tampilan bergaya glassmorphism di atas kanvas arang hangat: cahaya oranye menyebar dari balik
+panel, permukaan kaca tembus pandang dengan garis rambut terang di tepi atasnya, dan satu warna
+aksen oranye `#f97316` untuk aksi utama. Blur latar hanya dipakai lapisan yang mengapung
+(header, dialog, popover, toast); panel di dalam alur cukup memakai isian kaca agar tetap
+ringan. Huruf [Outfit](https://fonts.google.com/specimen/Outfit) dengan fallback `system-ui`.
+Token ada di `src/app.css`; komponen dasar (ikon, switch, segmented, dialog, menu) di
 `src/components/ui/`. Ikon dari [Lucide](https://lucide.dev) lewat `ui/Icon.svelte`, satu
 ketebalan garis untuk semua; tidak ada emoji sebagai ikon.
 

@@ -53,7 +53,7 @@
     <span>AutoClip <b>Web</b></span>
   </button>
   <span class="status {status.cls}" title={settings.helperUrl}
-    ><i></i>{status.text}{#if status.extra}<span class="status-extra">{status.extra}</span>{/if}</span
+    ><i></i><span class="status-text">{status.text}</span>{#if status.extra}<span class="status-extra">{status.extra}</span>{/if}</span
   >
   <button class="ghost settings-btn" onclick={() => (settingsOpen = true)} aria-label="Pengaturan">
     <Icon name="settings" /><span class="settings-label">Pengaturan</span>
@@ -82,15 +82,27 @@
 <style>
   .top {
     position: sticky;
-    top: 0;
+    top: 12px;
     z-index: 10;
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 10px 20px;
-    background: rgba(17, 17, 19, 0.86);
-    backdrop-filter: blur(10px);
-    border-bottom: 1px solid var(--border);
+    width: calc(100% - 24px);
+    max-width: 1400px;
+    margin: 12px auto 0;
+    padding: 9px 12px 9px 16px;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    background: linear-gradient(160deg, rgba(60, 48, 44, 0.86), rgba(24, 20, 20, 0.92));
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    box-shadow:
+      var(--shadow-float),
+      inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  }
+  .brand img {
+    border-radius: 9px;
+    box-shadow: 0 8px 20px -10px rgba(249, 115, 22, 0.9);
   }
   .brand {
     display: flex;
@@ -114,10 +126,13 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    height: 26px;
-    padding: 0 10px;
+    height: 28px;
+    min-width: 0;
+    padding: 0 11px;
     border-radius: 999px;
-    background: var(--ink-2);
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.06);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
     font-size: 12px;
     color: var(--muted);
   }
@@ -129,18 +144,24 @@
   }
   .status.ok i {
     background: var(--ok);
-    box-shadow: 0 0 0 3px var(--ok-soft);
+    box-shadow: 0 0 0 3px var(--ok-soft), 0 0 12px rgba(74, 222, 128, 0.7);
   }
   .status.warn i {
     background: var(--warn);
+    box-shadow: 0 0 0 3px var(--warn-soft);
   }
   .status.bad i {
     background: var(--bad);
+    box-shadow: 0 0 0 3px var(--bad-soft);
   }
   .brand,
   .status,
   .settings-btn {
     white-space: nowrap;
+  }
+  .status-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .status i {
     flex: none;
@@ -149,15 +170,19 @@
     min-height: 36px;
   }
   main {
-    padding: 18px 20px 60px;
+    padding: 22px 20px 60px;
     max-width: 1400px;
     margin: 0 auto;
   }
-  /* Keep the sticky header to one short row on phones so it covers as little as possible. */
+  /* Keep the floating header to one short row on phones so it covers as little as possible. */
   @media (max-width: 640px) {
     .top {
+      top: 8px;
       gap: 8px;
-      padding: 8px 12px;
+      width: calc(100% - 16px);
+      margin-top: 8px;
+      padding: 8px 8px 8px 12px;
+      border-radius: 16px;
     }
     .status-extra,
     .settings-label {
@@ -168,8 +193,34 @@
       justify-content: center;
       padding: 0;
     }
+    .status {
+      padding: 0 9px;
+    }
     main {
-      padding: 14px 12px 48px;
+      padding: 18px 12px 48px;
+    }
+  }
+  /* Very narrow phones: the wordmark loses its suffix, so the status stays readable. */
+  @media (max-width: 420px) {
+    .top {
+      gap: 6px;
+      padding-left: 10px;
+      padding-right: 6px;
+    }
+    .brand {
+      gap: 8px;
+      font-size: 14px;
+    }
+    .brand b {
+      display: none;
+    }
+    .status {
+      gap: 5px;
+      padding: 0 8px;
+      font-size: 11px;
+    }
+    .settings-btn {
+      min-width: 36px;
     }
   }
 </style>

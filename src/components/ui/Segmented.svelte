@@ -53,7 +53,10 @@
     width: calc((100% - 4px) / var(--n));
     border-radius: var(--radius-sm);
     background: var(--raised);
-    box-shadow: 0 0 0 1px var(--ink-3), 0 1px 2px rgba(0, 0, 0, 0.3);
+    box-shadow:
+      0 0 0 1px var(--border-strong),
+      0 2px 6px rgba(0, 0, 0, 0.35),
+      inset 0 1px 0 rgba(255, 255, 255, 0.14);
     transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
   }
   button {

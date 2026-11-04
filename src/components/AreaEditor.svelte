@@ -191,8 +191,9 @@
   .area {
     position: absolute;
     border: 2px solid var(--accent);
-    border-radius: 4px;
-    background: rgba(59, 130, 246, 0.12);
+    border-radius: 6px;
+    background: rgba(249, 115, 22, 0.14);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 22px -6px rgba(249, 115, 22, 0.6);
     cursor: move;
     touch-action: none;
   }

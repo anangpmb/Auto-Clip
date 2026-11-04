@@ -440,7 +440,8 @@
     min-height: 300px;
     padding: 10px;
     border-radius: var(--radius-xl);
-    background: #0b0b0d;
+    background: #0c0a0a;
+    box-shadow: inset 0 0 0 1px var(--border);
     container-type: size;
   }
   .frame {
@@ -537,9 +538,12 @@
     height: 60px;
     /* A play triangle looks centred a little toward its point. */
     padding-left: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
     border-radius: 50%;
-    background: rgba(0, 0, 0, 0.55);
+    background: rgba(24, 16, 12, 0.55);
+    backdrop-filter: blur(8px);
     color: #fff;
+    box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.9);
     transition: transform 0.15s ease-out;
   }
   .big-play :global(.icon) {
@@ -559,7 +563,7 @@
     padding: 18px;
     text-align: center;
     font-size: 13px;
-    background: #0b0b0d;
+    background: #0c0a0a;
   }
   .state p {
     margin: 0;

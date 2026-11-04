@@ -1,55 +1,70 @@
 /*
- * Tokens follow the dark look of the stageshow kit: one neutral gray family where depth
- * comes from lighter surfaces, three text inks, one accent, and status colors for status only.
+ * Glass kit: a warm charcoal canvas with orange light bleeding in from behind, translucent
+ * glass surfaces (white wash + hairline highlight) and one orange accent. Depth comes from
+ * translucency and a lit top edge, not from flat gray steps.
  */
 :root {
-  --bg: #111113; /* canvas */
-  --panel: #1a1a1d; /* surface: cards, panes, dialogs */
-  --panel-2: #222225; /* a well inside a surface */
-  --raised: #29292d; /* buttons, popovers, the thumb of a segmented control */
-  --raised-hover: #313136;
-  --field: #141416;
+  --bg: #131011; /* canvas */
+  --panel: rgba(255, 255, 255, 0.055); /* surface: cards, panes, dialogs */
+  --panel-2: rgba(255, 255, 255, 0.085); /* a well inside a surface */
+  --raised: rgba(255, 255, 255, 0.09); /* buttons, popovers, segmented thumb */
+  --raised-hover: rgba(255, 255, 255, 0.14);
+  --field: rgba(8, 7, 8, 0.35); /* a well sunk into the glass */
 
   --ink-1: rgba(255, 255, 255, 0.04);
   --ink-2: rgba(255, 255, 255, 0.07);
   --ink-3: rgba(255, 255, 255, 0.1);
   --ink-4: rgba(255, 255, 255, 0.13);
   --ink-5: rgba(255, 255, 255, 0.2);
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.13);
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.16);
 
-  --text: #ececee;
-  --muted: #9d9da1;
-  --faint: #6c6c70;
-  --icon: #a3a3a8;
+  --text: #f2eee9;
+  --muted: #a9a29d;
+  --faint: #7b746f;
+  --icon: #b3aca7;
 
-  --accent: #3b82f6;
-  --accent-hover: #5592f7;
-  --accent-soft: rgba(59, 130, 246, 0.2);
-  --accent-text: #8fb8fa;
+  --accent: #f97316;
+  --accent-hover: #ff9142;
+  --accent-soft: rgba(249, 115, 22, 0.18);
+  --accent-text: #ffb37a;
+  --accent-line: rgba(249, 115, 22, 0.45); /* a hairline in the accent */
+  --accent-wash: rgba(249, 115, 22, 0.08); /* a selected row */
+  --accent-grad: linear-gradient(135deg, #ff9a4d, #f2600c);
+  --glow-accent: 0 12px 34px -14px rgba(249, 115, 22, 0.55);
   --accent-2: var(--accent-text); /* links */
 
+  /* Amber sits a step toward yellow so a warning never reads as the accent orange. */
   --ok: #22c55e;
   --ok-soft: rgba(34, 197, 94, 0.16);
   --ok-text: #4ade80;
-  --warn: #f59e0b;
-  --warn-soft: rgba(245, 158, 11, 0.16);
-  --warn-text: #fbbf24;
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.16);
+  --warn-text: #fcd34d;
   --bad: #ef4444;
-  --bad-soft: rgba(239, 68, 68, 0.16);
+  --bad-soft: rgba(239, 68, 68, 0.18);
   --bad-text: #f87171;
 
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 10px;
-  --radius-xl: 12px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-2xl: 26px;
   --radius: var(--radius-lg);
 
-  --shadow-float: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 4px 16px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.3);
+  /* A glass surface: a lit top-down wash. Paint it together with a hairline lit edge. */
+  --glass-fill: linear-gradient(155deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03) 60%, rgba(255, 255, 255, 0.055));
+  /* Floating layers (nav, dialogs, popovers) also blur what is behind them. */
+  --glass-float: linear-gradient(160deg, rgba(58, 47, 43, 0.9), rgba(26, 22, 22, 0.95));
+  --glass-blur: blur(24px) saturate(150%);
+
+  --shadow-float: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 28px 64px -20px rgba(0, 0, 0, 0.8), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
   --shadow-satellite: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 14px 32px -8px rgba(0, 0, 0, 0.7), 0 4px 10px -4px rgba(0, 0, 0, 0.5);
+  --shadow-glass: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 26px 60px -40px rgba(0, 0, 0, 0.95);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
 
   color-scheme: dark;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Outfit', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-size: 14px;
   line-height: 1.5;
   color: var(--text);
@@ -62,13 +77,57 @@
 }
 
 html {
-  /* In-page scrolls stop below the sticky header instead of hiding behind it. */
-  scroll-padding-top: 72px;
+  /* In-page scrolls stop below the floating header instead of hiding behind it. */
+  scroll-padding-top: 96px;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
+  background-color: var(--bg);
+}
+
+/* Orange light bleeding in from above, an ember to the right, and a vignette at the edges.
+   Fixed and inert: the glow stays put while the page scrolls. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(1100px 640px at 50% -12%, rgba(255, 122, 30, 0.3), transparent 62%),
+    radial-gradient(820px 520px at 92% 12%, rgba(255, 96, 16, 0.15), transparent 66%),
+    radial-gradient(760px 460px at 2% 92%, rgba(255, 140, 60, 0.1), transparent 70%),
+    radial-gradient(130% 110% at 50% 50%, transparent 38%, rgba(0, 0, 0, 0.55) 100%);
+  background-repeat: no-repeat;
+}
+
+/* Film grain over the whole canvas: fixed and inert, so it never repaints on scroll. */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.04;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+}
+
+/* Content paints above the grain; dialogs live in the top layer, so they are unaffected. */
+#app {
+  position: relative;
+  z-index: 1;
+}
+
+::selection {
+  background: rgba(249, 115, 22, 0.32);
+  color: #fff;
+}
+
+h1 {
+  text-wrap: balance;
 }
 
 button,
@@ -93,18 +152,22 @@ button {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--raised);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
   font-size: 13px;
   font-weight: 500;
   line-height: 20px;
   cursor: pointer;
   transition:
-    background-color 0.15s,
-    border-color 0.15s,
-    color 0.15s;
+    background-color 0.18s var(--ease),
+    border-color 0.18s var(--ease),
+    box-shadow 0.18s var(--ease),
+    color 0.18s var(--ease);
 }
 
 button:hover:not(:disabled) {
   background: var(--raised-hover);
+  border-color: var(--border-strong);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 button:active:not(:disabled) {
@@ -122,9 +185,12 @@ button .icon {
 }
 
 button.primary {
-  border-color: transparent;
-  background: var(--accent);
+  border-color: rgba(255, 255, 255, 0.16);
+  background: var(--accent-grad);
   color: #fff;
+  box-shadow:
+    var(--glow-accent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
 button.primary .icon {
@@ -132,7 +198,10 @@ button.primary .icon {
 }
 
 button.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: linear-gradient(135deg, #ffab63, #ff7018);
+  box-shadow:
+    0 16px 40px -14px rgba(249, 115, 22, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.32);
 }
 
 button.ghost {
@@ -191,11 +260,12 @@ textarea {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   background: var(--field);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
   font-size: 13px;
   line-height: 20px;
   transition:
-    border-color 0.15s,
-    box-shadow 0.15s;
+    border-color 0.18s var(--ease),
+    box-shadow 0.18s var(--ease);
 }
 
 input::placeholder,
@@ -208,7 +278,9 @@ select:focus,
 textarea:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow:
+    0 0 0 3px var(--accent-soft),
+    inset 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 input[type='checkbox'],
@@ -262,6 +334,7 @@ code {
   padding: 0 8px;
   border-radius: 999px;
   background: var(--ink-2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
   color: var(--text);
   font-size: 11px;
   font-weight: 500;
@@ -297,6 +370,7 @@ code {
   padding: 10px 12px;
   border-radius: var(--radius-md);
   background: var(--ink-1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
   font-size: 12.5px;
   line-height: 1.45;
   color: var(--text);
@@ -344,6 +418,7 @@ code {
 .error {
   padding: 10px 12px;
   border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.28);
   color: #fecaca;
   font-size: 13px;
   text-align: left;
@@ -398,7 +473,23 @@ code {
   }
 }
 
-/* Quiet scrollbars on the dark surfaces. */
+/* Quiet scrollbars on the warm surfaces. */
 * {
-  scrollbar-color: var(--ink-4) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+/* No backdrop blur? Floating layers fall back to an opaque glass so text keeps its contrast. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --glass-float: linear-gradient(160deg, #2a2220, #191515);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  input,
+  select,
+  textarea {
+    transition-duration: 0.01ms;
+  }
 }

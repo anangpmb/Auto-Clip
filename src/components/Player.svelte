@@ -116,7 +116,7 @@
     font-size: 14px;
   }
   .error {
-    background: rgba(10, 12, 16, 0.92);
+    background: rgba(14, 10, 9, 0.92);
     color: var(--text);
   }
   .error a {

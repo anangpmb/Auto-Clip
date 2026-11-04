@@ -399,7 +399,7 @@
   .player-slot {
     position: relative;
     aspect-ratio: 16 / 9;
-    scroll-margin-top: 76px;
+    scroll-margin-top: 96px;
   }
   .player-shell {
     position: absolute;
@@ -410,10 +410,15 @@
     inset: auto 20px 20px auto;
     width: min(380px, calc(100vw - 40px));
     z-index: 40;
+    border: 1px solid var(--border-strong);
     border-radius: var(--radius-xl);
-    background: var(--raised);
+    background: var(--glass-float);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     overflow: hidden;
-    box-shadow: var(--shadow-satellite);
+    box-shadow:
+      var(--shadow-float),
+      inset 0 1px 0 rgba(255, 255, 255, 0.16);
     animation: mini-in 200ms ease-out;
   }
   .player-shell.floating :global(.player) {

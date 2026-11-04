@@ -78,8 +78,10 @@
     background: var(--raised);
   }
   .style.checked {
-    background: var(--accent-soft);
-    box-shadow: inset 0 0 0 1px var(--accent);
+    background: var(--accent-wash);
+    box-shadow:
+      inset 0 0 0 1px var(--accent-line),
+      0 0 26px -16px rgba(249, 115, 22, 0.9);
   }
   .style:has(input:focus-visible) {
     outline: 2px solid var(--accent);
