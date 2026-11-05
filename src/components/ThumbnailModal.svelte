@@ -11,6 +11,7 @@
     versionBefore,
     type HelperHealth,
   } from '../lib/helper';
+  import { DARK_FRAME_LUMA, isDarkFrame, meanLuminance, thumbnailSeekTimes } from '../lib/thumbnail';
 
   interface Props {
     helperUrl: string;
@@ -52,6 +53,7 @@
           : '',
   );
   let hookText = $state(untrack(() => initialHook));
+  let darkWarning = $state('');
   let progress = $state(0);
   let message = $state('');
   let error = $state('');
@@ -67,9 +69,18 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  function waitForMedia(video: HTMLVideoElement, event: 'loadedmetadata' | 'seeked'): Promise<void> {
+  function waitForMedia(
+    video: HTMLVideoElement,
+    event: 'loadedmetadata' | 'seeked',
+    timeoutMs = 8000,
+  ): Promise<void> {
     return new Promise((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        clean();
+        reject(new Error(`Menunggu video (${event}) terlalu lama. Coba lagi.`));
+      }, timeoutMs);
       const clean = () => {
+        clearTimeout(timer);
         video.removeEventListener(event, done);
         video.removeEventListener('error', failed);
       };
@@ -86,10 +97,57 @@
     });
   }
 
+  /**
+   * Wait until a decoded frame is actually presented, not just until the seek
+   * finished. A paused, detached video can report `seeked` while drawImage
+   * still yields black pixels; requestVideoFrameCallback only fires once a
+   * frame is presented, and a brief play is the fallback where it is missing
+   * or never fires.
+   */
+  async function waitForVideoFrame(video: HTMLVideoElement): Promise<void> {
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      const presented = await new Promise<boolean>((resolve) => {
+        let done = false;
+        const timer = window.setTimeout(() => {
+          if (!done) {
+            done = true;
+            resolve(false);
+          }
+        }, 1500);
+        video.requestVideoFrameCallback(() => {
+          if (!done) {
+            done = true;
+            clearTimeout(timer);
+            resolve(true);
+          }
+        });
+      });
+      if (presented) return;
+    }
+    try {
+      await video.play();
+    } catch {
+      // A play that is refused still leaves the seeked frame to draw.
+    }
+    await delay(120);
+    video.pause();
+    await delay(50);
+  }
+
+  /** Mean luminance of a drawn frame, or null when the canvas cannot be read. */
+  function measureFrame(ctx: CanvasRenderingContext2D): number | null {
+    try {
+      return meanLuminance(ctx.getImageData(0, 0, WIDTH, HEIGHT).data);
+    } catch {
+      return null;
+    }
+  }
+
   async function makeThumbnail() {
     if (blocked || loading) return;
     loading = true;
     error = '';
+    darkWarning = '';
     ready = false;
     progress = 0;
     cancelled = false;
@@ -113,35 +171,85 @@
       sourceVideo = video;
       video.crossOrigin = 'anonymous';
       video.muted = true;
+      video.playsInline = true;
       video.preload = 'auto';
+      // In the DOM, even off-screen: some browsers do not decode frames for a
+      // detached video, so the old detached element could draw black.
+      video.setAttribute('aria-hidden', 'true');
+      video.style.cssText = 'position:fixed;left:-9999px;top:0;width:320px;height:180px;pointer-events:none;';
+      document.body.appendChild(video);
       video.src = previewVideoUrl(helperUrl, id);
       const metadata = waitForMedia(video, 'loadedmetadata');
       video.load();
       await metadata;
       if (cancelled) return;
+      if (!video.videoWidth || !video.videoHeight || video.readyState < 1) {
+        throw new Error('Video pratinjau tidak bisa dibaca. Coba siapkan ulang.');
+      }
 
-      const seekTo = Math.min(1, Math.max(0, video.duration / 3));
-      const seeked = waitForMedia(video, 'seeked');
-      video.currentTime = seekTo;
-      await seeked;
-      if (cancelled) return;
-
-      const frame = document.createElement('canvas');
-      frame.width = WIDTH;
-      frame.height = HEIGHT;
-      const ctx = frame.getContext('2d');
-      if (!ctx) throw new Error('Browser tidak bisa membuat gambar thumbnail.');
+      // Try the first second, then step forward: that second can be a fade
+      // from black or a dark cut, and a dark frame is retried, not accepted.
+      const attempt = document.createElement('canvas');
+      attempt.width = WIDTH;
+      attempt.height = HEIGHT;
+      const actx = attempt.getContext('2d');
+      if (!actx) throw new Error('Browser tidak bisa membuat gambar thumbnail.');
+      const best = document.createElement('canvas');
+      best.width = WIDTH;
+      best.height = HEIGHT;
+      const bctx = best.getContext('2d');
+      if (!bctx) throw new Error('Browser tidak bisa membuat gambar thumbnail.');
+      let bestLuma = -1;
+      let bestTime = 0;
+      let picked: { time: number; luma: number | null } | null = null;
       const scale = Math.max(WIDTH / video.videoWidth, HEIGHT / video.videoHeight);
       const drawWidth = video.videoWidth * scale;
       const drawHeight = video.videoHeight * scale;
-      ctx.drawImage(video, (WIDTH - drawWidth) / 2, (HEIGHT - drawHeight) / 2, drawWidth, drawHeight);
-      sourceFrame = frame;
+      for (const seekTo of thumbnailSeekTimes(video.duration)) {
+        if (cancelled) return;
+        message = `Mengambil frame di ${seekTo.toFixed(1)} dtk...`;
+        const seeked = waitForMedia(video, 'seeked');
+        video.currentTime = seekTo;
+        await seeked;
+        if (cancelled) return;
+        await waitForVideoFrame(video);
+        if (cancelled) return;
+        if (video.readyState < 2) continue;
+        actx.clearRect(0, 0, WIDTH, HEIGHT);
+        actx.drawImage(video, (WIDTH - drawWidth) / 2, (HEIGHT - drawHeight) / 2, drawWidth, drawHeight);
+        const luma = measureFrame(actx);
+        if (luma !== null && luma > bestLuma) {
+          bestLuma = luma;
+          bestTime = seekTo;
+          bctx.clearRect(0, 0, WIDTH, HEIGHT);
+          bctx.drawImage(attempt, 0, 0);
+        }
+        if (luma === null || !isDarkFrame(luma)) {
+          picked = { time: seekTo, luma };
+          break;
+        }
+      }
+      // The attempt canvas holds the frame that broke the loop; the best
+      // canvas holds the brightest frame when every attempt was dark.
+      const usedBest = !picked;
+      if (usedBest) {
+        // Every tried frame was dark: keep the brightest one, but say so
+        // instead of claiming the thumbnail is ready.
+        if (bestLuma < 0) throw new Error('Tidak ada frame video yang bisa diambil.');
+        picked = { time: bestTime, luma: bestLuma };
+        darkWarning = `Frame yang diambil masih gelap (kecerahan ${Math.round(bestLuma)} dari 255, ambang ${DARK_FRAME_LUMA}). Klip ini mungkin memang dimulai dengan adegan gelap; coba ambil ulang atau pilih klip lain.`;
+      }
+      sourceFrame = usedBest ? best : attempt;
+      video.pause();
+      video.remove();
       ready = true;
-      message = 'Thumbnail siap. Edit teks hook jika perlu.';
+      message = darkWarning ? 'Thumbnail siap, tapi frame-nya gelap.' : 'Thumbnail siap. Edit teks hook jika perlu.';
       onhookchange(hookText);
       await tick();
       renderThumbnail(hookText);
     } catch (e) {
+      sourceVideo?.pause();
+      sourceVideo?.remove();
       if (!cancelled) error = (e as Error).message;
     } finally {
       if (!cancelled) loading = false;
@@ -267,6 +375,7 @@
   onDestroy(() => {
     cancelled = true;
     sourceVideo?.pause();
+    sourceVideo?.remove();
     if (sourceVideo) {
       sourceVideo.removeAttribute('src');
       sourceVideo.load();
@@ -316,6 +425,9 @@
       {/if}
       {#if error}
         <div class="notice bad"><Icon name="alert" size={15} /><span>{error}</span></div>
+      {/if}
+      {#if darkWarning}
+        <div class="notice warn"><Icon name="warning" size={15} /><span>{darkWarning}</span></div>
       {/if}
 
       {#if loading}
