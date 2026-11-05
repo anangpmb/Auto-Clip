@@ -136,6 +136,12 @@ gaya caption, pratinjaunya langsung berubah. Jalur wajah dari pratinjau dipakai 
 saat ekspor, jadi hasilnya sama dan ekspor lebih cepat. Butuh helper 0.4.0 atau lebih baru;
 tata letak blur terbaru memerlukan helper 0.6.1 atau lebih baru.
 
+Di panel yang sama ada **Watermark sumber**: satu baris kecil nama channel video sumber
+yang dibakar ke video hasil ekspor, supaya penonton tahu darimana video itu diambil.
+Posisinya default kanan atas, teksnya bisa diedit, dan ukurannya, opasitasnya, serta
+gayanya (teks saja atau latar gelap tipis) bisa diatur. Butuh helper 0.7.0 atau lebih baru;
+kalau helper lebih lama, panel ekspor akan memintamu memperbaruinya dulu.
+
 Saat **Mulai Render Video**, helper:
 
 1. Mengunduh hanya potongan klip itu, maksimal 1080p. Potongan diambil langsung per

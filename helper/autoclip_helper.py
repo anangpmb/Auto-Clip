@@ -40,7 +40,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlparse
 
-VERSION = "0.6.1"
+VERSION = "0.7.0"
 DEFAULT_PORT = 8765
 DEV_ORIGINS = {
     "http://localhost:5173",
@@ -399,6 +399,9 @@ FACE_SLOT = (1080, 640)
 BIG_FACE = 0.03  # share of the frame width: smaller faces are background, except a webcam's
 WEBCAM_FACE = 0.012
 CAPTION_STYLES = ("viral", "box", "classic", "neon", "none")
+WATERMARK_POSITIONS = ("top-left", "top-right", "bottom-left", "bottom-right")
+WATERMARK_SIZES = ("small", "medium")
+WATERMARK_STYLES = ("text", "shaded")
 POSITIONS = ("bottom", "center", "top")
 MAX_CLIP_SECONDS = 10 * 60  # also the limit for a whole compilation
 MAX_SEGMENTS = 30  # scenes in one compilation
@@ -1240,6 +1243,66 @@ def render_caption_track(cues: list[dict], style: str, position: str, out_w: int
     return playlist, band_y
 
 
+def _clean_watermark(raw) -> dict | None:
+    """Validated watermark from an export request, or None when there is none.
+
+    An empty text or a switched-off watermark in the web app never reaches here
+    as a payload, but the helper still treats those as "no watermark" rather
+    than drawing a placeholder.
+    """
+    if not isinstance(raw, dict):
+        return None
+    text = str(raw.get("text", "")).strip()[:120]
+    if not text:
+        return None
+    try:
+        opacity = float(raw.get("opacity", 0.7))
+    except (TypeError, ValueError):
+        opacity = 0.7
+    return {
+        "text": text,
+        "position": raw.get("position") if raw.get("position") in WATERMARK_POSITIONS else "top-right",
+        "size": raw.get("size") if raw.get("size") in WATERMARK_SIZES else "small",
+        "style": raw.get("style") if raw.get("style") in WATERMARK_STYLES else "text",
+        "opacity": min(0.9, max(0.4, opacity)),
+    }
+
+
+def render_watermark(wm: dict, out_w: int, out_h: int, tmpdir: str) -> tuple[str, int, int]:
+    """One quiet PNG line of attribution, plus where ffmpeg overlays it.
+
+    Size is a share of the frame height, the same share the web preview uses,
+    so the preview and the export agree. Text only gets a thin dark outline;
+    the shaded style gets one dark wash behind the text, for bright footage.
+    """
+    from PIL import Image, ImageDraw
+
+    share = 0.04 if wm["size"] == "medium" else 0.028
+    size = max(12, round(share * out_h))
+    font = caption_font(size)
+    alpha = round(wm["opacity"] * 255)
+    text_w = round(font.getlength(wm["text"]))
+    pad_x = round(size * 0.65) if wm["style"] == "shaded" else 0
+    pad_y = round(size * 0.35) if wm["style"] == "shaded" else 0
+    box_w = text_w + 2 * pad_x
+    box_h = round(size * 1.2) + 2 * pad_y
+    img = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    if wm["style"] == "shaded":
+        draw.rounded_rectangle([0, 0, box_w - 1, box_h - 1], radius=round(size * 0.35), fill=(0, 0, 0, 115))
+        draw.text((pad_x, pad_y), wm["text"], font=font, fill=(255, 255, 255, alpha))
+    else:
+        stroke = max(1, round(size * 0.08))
+        draw.text((pad_x, pad_y), wm["text"], font=font, fill=(255, 255, 255, alpha),
+                  stroke_width=stroke, stroke_fill=(0, 0, 0, alpha))
+    path = os.path.join(tmpdir, "watermark.png")
+    img.save(path)
+    mx, my = round(out_w * 0.03), round(out_h * 0.035)
+    x = out_w - mx - box_w if wm["position"].endswith("right") else mx
+    y = out_h - my - box_h if wm["position"].startswith("bottom") else my
+    return path, max(0, x), max(0, y)
+
+
 # -- compilations ----------------------------------------------------------
 #
 # A compilation joins several scenes of one video into a single clip. The web app lays
@@ -1506,6 +1569,14 @@ def _run_export_job(job: dict, params: dict):
                 else:
                     notes.append("Caption dilewati karena Pillow belum terpasang.")
 
+            watermark = None
+            wm = _clean_watermark(params.get("watermark"))
+            if wm:
+                if has_module("PIL"):
+                    watermark = render_watermark(wm, out_w, out_h, tmpdir)
+                else:
+                    notes.append("Watermark dilewati karena Pillow belum terpasang.")
+
             if many:
                 scenes = [
                     layout_graph(f"[s{i}]", f"[l{i}]", layout, m["height"], crop_ws[i], exprs[i], out_w, out_h,
@@ -1521,12 +1592,21 @@ def _run_export_job(job: dict, params: dict):
             cmd = [ffmpeg_bin, "-hide_banner", "-y"]
             for raw in raws:
                 cmd += ["-i", raw]
+            # Overlays chain through one intermediate label, so a watermark is
+            # never covered by a caption band and never covers one either: it
+            # sits on top of the captioned frame, in its own corner.
+            base_label, next_input = "base", n
             if captions:
                 playlist, band_y = captions
                 cmd += ["-f", "concat", "-safe", "0", "-i", playlist]
-                graph += f";[base][{n}:v]overlay=0:{band_y}:eof_action=pass:format=auto[vout]"
+                graph += f";[base][{n}:v]overlay=0:{band_y}:eof_action=pass:format=auto[captioned]"
+                base_label, next_input = "captioned", n + 1
+            if watermark:
+                wm_path, wm_x, wm_y = watermark
+                cmd += ["-i", wm_path]
+                graph += f";[{base_label}][{next_input}:v]overlay={wm_x}:{wm_y}:eof_action=pass:format=auto[vout]"
             else:
-                graph += ";[base]null[vout]"
+                graph += f";[{base_label}]null[vout]"
             final = os.path.join(tmpdir, "final.mp4")
             cmd += [
                 "-filter_complex", graph, "-map", "[vout]", *sound,

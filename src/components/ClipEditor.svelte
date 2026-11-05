@@ -29,6 +29,7 @@
     videoId: string;
     videoUrl?: string;
     videoTitle?: string;
+    videoChannel?: string;
     settings: Settings;
     helperOk?: boolean;
     helperHealth?: HelperHealth | null;
@@ -43,6 +44,7 @@
     videoId,
     videoUrl = '',
     videoTitle = '',
+    videoChannel = '',
     settings = $bindable(),
     helperOk = false,
     helperHealth = null,
@@ -333,6 +335,7 @@
       videoUrl={videoUrl || `https://www.youtube.com/watch?v=${videoId}`}
       {videoId}
       videoTitle={videoTitle || clip.title}
+      {videoChannel}
       bind:settings
       helperOk={helperOk ?? false}
       helperHealth={helperHealth ?? null}

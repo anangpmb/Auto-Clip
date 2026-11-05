@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
   import CaptionSettings from './CaptionSettings.svelte';
   import FinalPreview from './FinalPreview.svelte';
+  import WatermarkSettings from './WatermarkSettings.svelte';
   import FormatPicker from './FormatPicker.svelte';
   import Icon from './ui/Icon.svelte';
   import Modal from './ui/Modal.svelte';
@@ -19,8 +20,10 @@
     PREVIEW_HELPER_VERSION,
     startExport,
     versionBefore,
+    WATERMARK_HELPER_VERSION,
     type HelperHealth,
   } from '../lib/helper';
+  import { resolveWatermark } from '../lib/watermark';
   import type { Box } from '../lib/preview';
   import { loadLayout, saveLayout } from '../lib/storage';
   import { copyText } from '../lib/clipboard';
@@ -34,6 +37,7 @@
     videoUrl: string;
     videoId: string;
     videoTitle: string;
+    videoChannel?: string;
     settings: Settings;
     helperOk: boolean;
     helperHealth: HelperHealth | null;
@@ -52,6 +56,7 @@
     videoUrl,
     videoId,
     videoTitle,
+    videoChannel = '',
     settings = $bindable(),
     helperOk,
     helperHealth,
@@ -77,6 +82,9 @@
   const uppercase = $derived(settings.captionUppercase);
   const gamingMode = $derived(aspectRatio === '9:16_gaming');
   const sourceUrl = $derived(videoUrl || `https://www.youtube.com/watch?v=${videoId}`);
+  /** Per-export text, starting from this video's channel; position and style stay in settings. */
+  let watermarkText = $state(untrack(() => videoChannel));
+  const watermark = $derived(resolveWatermark(settings.watermark, videoChannel, watermarkText));
 
   // Gamer mode areas picked by hand belong to the video (a webcam stays put), so every clip shares them.
   // The dialog opens for one video, so the areas saved when it opened are the ones to start from.
@@ -98,7 +106,7 @@
           ? COMPILATION_HELPER_VERSION
           : PREVIEW_HELPER_VERSION,
   );
-  const exportVersion = $derived(
+  const baseExportVersion = $derived(
     gamingMode
       ? GAMING_HELPER_VERSION
       : aspectRatio === '9:16_blur'
@@ -106,6 +114,10 @@
         : many
           ? COMPILATION_HELPER_VERSION
           : EXPORT_HELPER_VERSION,
+  );
+  // A watermark needs a helper that understands it; an older helper would silently drop it.
+  const exportVersion = $derived(
+    watermark && versionBefore(baseExportVersion, WATERMARK_HELPER_VERSION) ? WATERMARK_HELPER_VERSION : baseExportVersion,
   );
   const tooLongText = 'Total kompilasi lebih dari 10 menit. Keluarkan atau pendekkan beberapa adegan.';
   const what = $derived(gamingMode ? 'Mode gamer' : many ? 'Kompilasi' : 'Pratinjau');
@@ -161,6 +173,7 @@
           aspectRatio,
           burnCaptions: captionEnabled,
           srtFilename: `${safeTitle}.srt`,
+          watermark: watermark ?? undefined,
         })
       : '',
   );
@@ -190,6 +203,7 @@
         captionStyle: captionEnabled ? captionStyle : 'none',
         captionPosition,
         cues,
+        watermark: watermark ?? undefined,
         previewId: previewId || undefined,
         gaming: gamingMode
           ? { face: $state.snapshot(faceBox) ?? detectedFace, game: $state.snapshot(gameBox), faceTop: settings.gamingFaceTop }
@@ -278,6 +292,7 @@
           videoUrl={sourceUrl}
           {scenes}
           {cues}
+          {watermark}
           aspect={aspectRatio}
           {captionEnabled}
           {captionStyle}
@@ -362,6 +377,11 @@
       <section class="group">
         <h3 class="group-title">Caption</h3>
         <CaptionSettings bind:settings />
+      </section>
+
+      <section class="group">
+        <h3 class="group-title">Watermark sumber</h3>
+        <WatermarkSettings bind:settings channel={videoChannel} bind:text={watermarkText} />
       </section>
 
       <!-- Render with the helper -->

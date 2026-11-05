@@ -1,8 +1,10 @@
 <script lang="ts">
   import AreaEditor from './AreaEditor.svelte';
   import CaptionOverlay from './CaptionOverlay.svelte';
+  import SourceWatermark from './SourceWatermark.svelte';
   import Icon from './ui/Icon.svelte';
   import type { AspectRatio, CaptionCue, CaptionPosition, CaptionStyle } from '../lib/captions';
+  import type { WatermarkPayload } from '../lib/watermark';
   import { sceneIndexAt, sceneStarts } from '../lib/compilation';
   import { checkPreviewStatus, previewVideoUrl, startPreview, type PreviewStatus } from '../lib/helper';
   import {
@@ -25,6 +27,8 @@
     scenes: { start: number; end: number; title?: string }[];
     /** Captions timed from the start of the final video: the same cues the export burns in. */
     cues: CaptionCue[];
+    /** Source-channel watermark, shown in the frame exactly where the export burns it. */
+    watermark?: WatermarkPayload | null;
     aspect: AspectRatio;
     captionEnabled: boolean;
     captionStyle: CaptionStyle;
@@ -43,6 +47,7 @@
     videoUrl,
     scenes,
     cues,
+    watermark = null,
     aspect,
     captionEnabled,
     captionStyle,
@@ -337,6 +342,7 @@
           {vertical}
           area={gaming ? gamingCaptionArea(faceTop) : null}
         />
+        <SourceWatermark {watermark} />
         <button class="hit" onclick={toggle} aria-label={playing ? 'Jeda pratinjau' : 'Putar pratinjau'}>
           {#if !playing && !started}
             <span class="big-play" aria-hidden="true"><Icon name="play" size={26} /></span>
