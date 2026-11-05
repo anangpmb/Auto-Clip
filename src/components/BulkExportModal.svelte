@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
   import CaptionSettings from './CaptionSettings.svelte';
   import FormatPicker from './FormatPicker.svelte';
+  import WatermarkSettings from './WatermarkSettings.svelte';
   import Icon from './ui/Icon.svelte';
   import Modal from './ui/Modal.svelte';
   import type { Clip, Settings, Word } from '../lib/types';
@@ -14,8 +15,10 @@
     getExportDownloadUrl,
     startExport,
     versionBefore,
+    WATERMARK_HELPER_VERSION,
     type HelperHealth,
   } from '../lib/helper';
+  import { resolveWatermark } from '../lib/watermark';
   import { loadLayout } from '../lib/storage';
   import { fmtDuration, fmtTime } from '../lib/transcript';
 
@@ -25,12 +28,13 @@
     videoUrl: string;
     videoId: string;
     videoTitle: string;
+    videoChannel?: string;
     settings: Settings;
     helperOk: boolean;
     helperHealth: HelperHealth | null;
     onclose: () => void;
   }
-  let { clips, words, videoUrl, videoId, videoTitle, settings = $bindable(), helperOk, helperHealth, onclose }: Props = $props();
+  let { clips, words, videoUrl, videoId, videoTitle, videoChannel = '', settings = $bindable(), helperOk, helperHealth, onclose }: Props = $props();
 
   type RowState = 'queued' | 'working' | 'done' | 'error';
   interface Row {
@@ -54,7 +58,12 @@
   const started = $derived(rows.length > 0);
   const doneRows = $derived(rows.filter((r) => r.state === 'done'));
   const pickedTotal = $derived(scenes.filter((s) => picked.includes(s.id)).reduce((t, s) => t + s.end - s.start, 0));
-  const requiredVersion = $derived(settings.aspectRatio === '9:16_blur' ? BLUR_LAYOUT_HELPER_VERSION : GAMING_HELPER_VERSION);
+  let watermarkText = $state(untrack(() => videoChannel));
+  const watermark = $derived(resolveWatermark(settings.watermark, videoChannel, watermarkText));
+  const baseRequiredVersion = $derived(settings.aspectRatio === '9:16_blur' ? BLUR_LAYOUT_HELPER_VERSION : GAMING_HELPER_VERSION);
+  const requiredVersion = $derived(
+    watermark && versionBefore(baseRequiredVersion, WATERMARK_HELPER_VERSION) ? WATERMARK_HELPER_VERSION : baseRequiredVersion,
+  );
   const outdated = $derived(versionBefore(helperHealth?.version, requiredVersion));
   const blocked = $derived(
     !helperOk
@@ -93,6 +102,7 @@
           captionStyle: settings.captionEnabled ? settings.captionStyle : 'none',
           captionPosition: settings.captionPosition,
           cues: settings.captionEnabled ? timelineCues(words, [s], { uppercase: settings.captionUppercase }) : [],
+          watermark: watermark ?? undefined,
           gaming:
             settings.aspectRatio === '9:16_gaming'
               ? { face: layout.face, game: layout.game, faceTop: settings.gamingFaceTop }
@@ -201,6 +211,11 @@
       <section class="group">
         <h3 class="group-title">Caption</h3>
         <CaptionSettings bind:settings />
+      </section>
+
+      <section class="group">
+        <h3 class="group-title">Watermark sumber</h3>
+        <WatermarkSettings bind:settings channel={videoChannel} bind:text={watermarkText} />
       </section>
 
       {#if blocked}

@@ -1,5 +1,6 @@
 import type { CaptionCue } from './captions';
 import type { Box } from './preview';
+import type { WatermarkPayload } from './watermark';
 import type { Track, VideoInfo, Word, WordTiming } from './types';
 
 export interface HelperHealth {
@@ -26,6 +27,8 @@ export const COMPILATION_HELPER_VERSION = '0.5.0';
 export const GAMING_HELPER_VERSION = '0.6.0';
 /** Oldest helper that crops the foreground to the centred two-thirds in blur format. */
 export const BLUR_LAYOUT_HELPER_VERSION = '0.6.1';
+/** Oldest helper that burns a source-channel watermark into the export. */
+export const WATERMARK_HELPER_VERSION = '0.7.0';
 
 /** True when version a is older than b (dotted numbers). */
 export function versionBefore(a: string | undefined, b: string): boolean {
@@ -66,6 +69,8 @@ export interface ExportParams {
   captionPosition?: 'bottom' | 'center' | 'top';
   /** Caption cues timed from the start of the final video; the helper draws them. */
   cues?: CaptionCue[];
+  /** Source-channel watermark to burn in (helper 0.7.0+); absent means none. */
+  watermark?: WatermarkPayload;
   /** Preview of this clip; its face path is reused so the export frames like the preview. */
   previewId?: string;
   /** Gamer mode: the gameplay and webcam areas; a null area is found automatically / centred. */

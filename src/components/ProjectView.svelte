@@ -424,6 +424,7 @@
             videoId={meta.video.id}
             videoUrl={meta.video.url}
             videoTitle={meta.video.title}
+            videoChannel={meta.video.channel}
             bind:settings
             {helperOk}
             {helperHealth}
@@ -460,6 +461,7 @@
       videoUrl={meta.video.url}
       videoId={meta.video.id}
       videoTitle={meta.video.title}
+      videoChannel={meta.video.channel}
       bind:settings
       {helperOk}
       {helperHealth}
@@ -478,6 +480,7 @@
       videoUrl={meta.video.url}
       videoId={meta.video.id}
       videoTitle={meta.video.title}
+      videoChannel={meta.video.channel}
       bind:settings
       {helperOk}
       {helperHealth}
@@ -504,6 +507,7 @@
       videoUrl={meta.video.url || `https://www.youtube.com/watch?v=${meta.video.id}`}
       videoId={meta.video.id}
       videoTitle={meta.video.title}
+      videoChannel={meta.video.channel}
       bind:settings
       {helperOk}
       {helperHealth}

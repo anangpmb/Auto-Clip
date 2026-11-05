@@ -1,5 +1,6 @@
 import type { Box } from './preview';
 import type { Clip, LoadedProject, ProjectMeta, ProjectSummary, Settings, Word } from './types';
+import { DEFAULT_WATERMARK_SETTINGS } from './watermark';
 
 const SETTINGS_KEY = 'autoclip.settings.v1';
 const INDEX_KEY = 'autoclip.projects.v1';
@@ -22,6 +23,7 @@ export const DEFAULT_SETTINGS: Settings = {
   captionStyle: 'viral',
   captionPosition: 'bottom',
   captionUppercase: true,
+  watermark: { ...DEFAULT_WATERMARK_SETTINGS },
   aspectRatio: '9:16_blur',
   gamingFaceTop: false,
 };

@@ -1,4 +1,6 @@
 import type { Word } from './types';
+import type { WatermarkPayload } from './watermark';
+import { watermarkDrawtext } from './watermark';
 
 export type CaptionStyle = 'viral' | 'box' | 'classic' | 'neon';
 export type CaptionPosition = 'bottom' | 'center' | 'top';
@@ -321,9 +323,10 @@ export function buildExportCommand(
     aspectRatio?: AspectRatio;
     burnCaptions?: boolean;
     srtFilename?: string;
+    watermark?: WatermarkPayload;
   } = {}
 ): string {
-  const { aspectRatio = '16:9', burnCaptions = true, srtFilename } = options;
+  const { aspectRatio = '16:9', burnCaptions = true, srtFilename, watermark } = options;
   const safeTitle = title.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_') || 'clip';
   const outName = `${safeTitle}.mp4`;
   const srtName = srtFilename || `${safeTitle}.srt`;
@@ -338,6 +341,10 @@ export function buildExportCommand(
   } else if (burnCaptions) {
     filter = `subtitles='${srtName}'`;
   }
+
+  // The watermark goes last, so it is never covered by a caption or a blur layer.
+  const drawtext = watermark ? watermarkDrawtext(watermark) : '';
+  if (drawtext) filter = filter ? `${filter},${drawtext}` : drawtext;
 
   const vfPart = filter ? (filter.includes(';') ? `-filter_complex "${filter}"` : `-vf "${filter}"`) : '';
 

@@ -1,3 +1,5 @@
+import type { WatermarkSettings } from './watermark';
+
 export type ProviderId = 'gemini' | 'openai' | 'anthropic' | 'openrouter';
 
 /** One spoken word with its start/end time in seconds. */
@@ -92,6 +94,8 @@ export interface Settings {
   captionStyle: 'viral' | 'box' | 'classic' | 'neon';
   captionPosition: 'bottom' | 'center' | 'top';
   captionUppercase: boolean;
+  /** Source-channel watermark preferences; the text itself comes from each video. */
+  watermark: WatermarkSettings;
   aspectRatio: '16:9' | '9:16_blur' | '9:16_crop' | '9:16_gaming';
   /** Gamer mode: the webcam above the gameplay instead of below it. */
   gamingFaceTop: boolean;
