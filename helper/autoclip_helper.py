@@ -411,6 +411,7 @@ PREVIEW_HEIGHT = 480
 # Previews are only played in the browser: small, quick, and in a format every browser decodes.
 PREVIEW_ENCODE = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p",
                   "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"]
+PREVIEW_CACHE_TTL = 15 * 24 * 60 * 60
 MAX_PREVIEWS = 6  # previews kept on disk; older ones are dropped
 
 # Exports and previews, told apart by "kind". A compilation preview lists the ids of its
@@ -490,6 +491,105 @@ def _cleanup_all_jobs():
     for job in list(_export_jobs.values()):
         if job.get("tmpdir"):
             shutil.rmtree(job["tmpdir"], ignore_errors=True)
+
+
+def _preview_cache_key(url: str, start: float, end: float) -> str:
+    identity = json.dumps(
+        [url, start, end, PREVIEW_HEIGHT, PREVIEW_ENCODE],
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(identity).hexdigest()
+
+
+def _purge_preview_cache():
+    cache_dir = os.path.join(DATA_DIR, "previews")
+    try:
+        entries = list(os.scandir(cache_dir))
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        sys.stderr.write(f"[helper] tidak bisa memeriksa cache pratinjau: {e}\n")
+        return
+    cutoff = time.time() - PREVIEW_CACHE_TTL
+    for entry in entries:
+        if not re.fullmatch(r"[a-f0-9]{64}\.(?:json|mp4)", entry.name):
+            continue
+        try:
+            if entry.is_file(follow_symlinks=False) and entry.stat(follow_symlinks=False).st_mtime < cutoff:
+                os.remove(entry.path)
+        except OSError as e:
+            sys.stderr.write(f"[helper] tidak bisa menghapus cache pratinjau {entry.name}: {e}\n")
+
+
+def _load_preview_cache(url: str, start: float, end: float) -> dict | None:
+    key = _preview_cache_key(url, start, end)
+    cache_dir = os.path.join(DATA_DIR, "previews")
+    video_path = os.path.join(cache_dir, f"{key}.mp4")
+    metadata_path = os.path.join(cache_dir, f"{key}.json")
+    try:
+        with open(metadata_path, encoding="utf-8") as f:
+            metadata = json.load(f)
+        names = ("width", "height", "duration", "fps", "audio", "crop_state", "crop_progress", "crop", "facecam")
+        if (not isinstance(metadata, dict) or metadata.get("key") != key
+                or not all(name in metadata for name in names) or not os.path.isfile(video_path)):
+            return None
+        os.utime(metadata_path, None)
+        os.utime(video_path, None)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, TypeError) as e:
+        sys.stderr.write(f"[helper] cache pratinjau tidak bisa dibaca ({key}): {e}\n")
+        return None
+
+    now = time.time()
+    return {
+        "kind": "preview",
+        "status": "ready",
+        "progress": 100,
+        "message": "Pratinjau siap dari cache lokal.",
+        "created_at": now,
+        "touched": now,
+        "file": video_path,
+        "url": url,
+        "start": start,
+        "end": end,
+        **{name: metadata[name] for name in (
+            "width", "height", "duration", "fps", "audio", "crop_state", "crop_progress", "crop", "facecam"
+        )},
+    }
+
+
+def _save_preview_cache(job: dict):
+    key = _preview_cache_key(job["url"], job["start"], job["end"])
+    cache_dir = os.path.join(DATA_DIR, "previews")
+    video_path = os.path.join(cache_dir, f"{key}.mp4")
+    metadata_path = os.path.join(cache_dir, f"{key}.json")
+    temp_video = os.path.join(cache_dir, f".{key}.{uuid.uuid4().hex}.mp4.tmp")
+    temp_metadata = os.path.join(cache_dir, f".{key}.{uuid.uuid4().hex}.json.tmp")
+    metadata = {
+        "key": key,
+        **{name: job.get(name) for name in (
+            "width", "height", "duration", "fps", "audio", "crop_state", "crop_progress", "crop", "facecam"
+        )},
+    }
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        shutil.copyfile(job["file"], temp_video)
+        os.replace(temp_video, video_path)
+        with open(temp_metadata, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=True)
+        os.replace(temp_metadata, metadata_path)
+    except OSError as e:
+        sys.stderr.write(f"[helper] tidak bisa menyimpan cache pratinjau: {e}\n")
+    finally:
+        for path in (temp_video, temp_metadata):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                sys.stderr.write(f"[helper] tidak bisa membersihkan file cache sementara: {e}\n")
 
 
 def probe_media(ffmpeg_bin: str, path: str) -> dict:
@@ -1727,6 +1827,7 @@ def _run_preview_job(job: dict):
         if crop_state == "pending":
             with _face_slot:
                 _analyze_preview(job, raw, iw, crop_w)
+        _save_preview_cache(job)
     except UserError as e:
         _update(job, status="error", error=str(e), message=f"Gagal: {e}")
     except Exception as e:
@@ -1811,21 +1912,25 @@ def _scene_preview(url: str, start: float, end: float) -> str:
                     and (j["url"], j["start"], j["end"]) == (url, start, end)):
                 j["touched"] = time.time()
                 return j["id"]
+        cached = _load_preview_cache(url, start, end)
         job_id = uuid.uuid4().hex
         job = {
             "id": job_id,
-            "kind": "preview",
-            "status": "pending",
-            "progress": 5,
-            "message": "Menyiapkan pratinjau...",
-            "created_at": time.time(),
-            "tmpdir": tempfile.mkdtemp(prefix="autoclip_preview_"),
-            "url": url,
-            "start": start,
-            "end": end,
+            **(cached or {
+                "kind": "preview",
+                "status": "pending",
+                "progress": 5,
+                "message": "Menyiapkan pratinjau...",
+                "created_at": time.time(),
+                "tmpdir": tempfile.mkdtemp(prefix="autoclip_preview_"),
+                "url": url,
+                "start": start,
+                "end": end,
+            }),
         }
         _export_jobs[job_id] = job
-    threading.Thread(target=_run_preview_job, args=(job,), daemon=True).start()
+    if job["status"] != "ready":
+        threading.Thread(target=_run_preview_job, args=(job,), daemon=True).start()
     return job_id
 
 
@@ -1836,6 +1941,7 @@ def start_preview(params: dict) -> str:
         raise UserError("Link YouTube tidak valid.")
     segs = [(round(s, 2), round(e, 2)) for s, e in parse_segments(params)]
     _purge_old_jobs()
+    _purge_preview_cache()
     if len(segs) == 1:
         return _scene_preview(url, *segs[0])
     with _jobs_lock:
@@ -2297,6 +2403,7 @@ def main() -> int:
         print(f"Port {args.port} sudah dipakai program lain ({e}). Coba --port yang lain.", file=sys.stderr)
         return 1
 
+    _purge_preview_cache()
     ensure_optional_packages()
     atexit.register(_cleanup_all_jobs)
 

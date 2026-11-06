@@ -147,6 +147,10 @@ Saat **Mulai Render Video**, helper:
 1. Mengunduh hanya potongan klip itu, maksimal 1080p. Potongan diambil langsung per
    fragmen DASH secara paralel (YouTube memperlambat unduhan potongan biasa sampai
    kira-kira secepat video diputar); kalau tidak bisa, otomatis memakai cara yt-dlp biasa.
+   Pratinjau memakai salinan ringan maksimal 480p dan disimpan lokal di
+   `~/.autoclip/previews` (Windows: `%USERPROFILE%\.autoclip\previews`). File cache yang
+   tidak dipakai selama 15 hari dihapus otomatis; membuka lagi klip dan rentang yang sama
+   sebelum itu memakai cache, bukan mengunduh ulang. Cache ini hanya ada di komputer ini.
 2. Untuk **9:16 Vertikal (Ikuti Wajah)**: mendeteksi wajah (OpenCV + model YuNet) dan
    pergantian shot, lalu menggerakkan "kamera" virtual. Kamera diam kalau wajah hanya
    bergeser sedikit, ikut bergeser halus kalau subjek berjalan, dan langsung pindah saat
