@@ -434,6 +434,18 @@ def get_ffmpeg_path() -> str | None:
     return None
 
 
+def _ensure_ffmpeg_on_path(ffmpeg_bin: str) -> None:
+    ffmpeg_dir = os.path.dirname(os.path.abspath(ffmpeg_bin))
+    path_entries = os.environ.get("PATH", "").split(os.pathsep)
+    if path_entries and os.path.abspath(path_entries[0] or os.curdir) == ffmpeg_dir:
+        return
+    path_entries = [
+        entry for entry in path_entries
+        if os.path.abspath(entry or os.curdir) != ffmpeg_dir
+    ]
+    os.environ["PATH"] = os.pathsep.join([ffmpeg_dir, *path_entries])
+
+
 def has_module(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
@@ -645,6 +657,8 @@ def _fast_section(ydl, info: dict, start: float, end: float, tmpdir: str, ffmpeg
 def download_section(
     url: str, start: float, end: float, tmpdir: str, ffmpeg_bin: str, height: int = 1080, preview: bool = False
 ) -> str:
+    # yt-dlp's partial-download availability check only searches PATH, not ffmpeg_location.
+    _ensure_ffmpeg_on_path(ffmpeg_bin)
     if preview:
         encode = PREVIEW_ENCODE
     else:
