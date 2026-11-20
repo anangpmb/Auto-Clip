@@ -3,10 +3,12 @@ import type { Word } from './types';
 import {
   buildUnits,
   clipBounds,
+  clipBoundsOrTime,
   fitDuration,
   fmtTime,
   nearestBoundary,
   remapClip,
+  replaceUnitText,
   sentenceStep,
   unitIndexOfWord,
   wordIndexAt,
@@ -117,6 +119,29 @@ describe('clipBounds', () => {
   });
 });
 
+describe('clipBoundsOrTime', () => {
+  const words = speech([['a'], ['b'], ['c']]);
+  const base = { w0: 1, w1: 1 };
+
+  it('uses free tlo/thi for a word clip when set, with no padding', () => {
+    const b = clipBoundsOrTime(words, { ...base, tlo: 0.1, thi: 3.0 }, 0.15, 0.35);
+    expect(b.start).toBeCloseTo(0.1);
+    expect(b.end).toBeCloseTo(3.0);
+  });
+
+  it('falls back to plain word bounds without tlo/thi', () => {
+    const b = clipBoundsOrTime(words, base, 0.15, 0.35);
+    expect(b.start).toBeCloseTo(words[1].s - 0.15);
+    expect(b.end).toBeCloseTo(words[1].e + 0.35);
+  });
+
+  it('uses t0/t1 for a no-transcript clip', () => {
+    const b = clipBoundsOrTime(words, { ...base, t0: 5, t1: 9 }, 0.15, 0.35);
+    expect(b.start).toBeCloseTo(5 - 0.15);
+    expect(b.end).toBeCloseTo(9 + 0.35);
+  });
+});
+
 describe('fitDuration', () => {
   // ten units of 10 s each
   const units = Array.from({ length: 10 }, (_, i) => ({ id: i, w0: i, w1: i, s: i * 10, e: i * 10 + 9, text: '' }));
@@ -150,4 +175,29 @@ it('fmtTime formats minutes, hours and tenths', () => {
   expect(fmtTime(3725)).toBe('1:02:05');
   expect(fmtTime(59.96, true)).toBe('1:00.0');
   expect(fmtTime(61.25, true)).toBe('1:01.3');
+});
+
+describe('replaceUnitText', () => {
+  it('re-timings evenly and keeps neighbouring words', () => {
+    const words = speech([['a', 'b', 'c'], ['d', 'e']]);
+    const units = buildUnits(words);
+    const u = units[1]; // "d e"
+    const out = replaceUnitText(words, u, 'x y z');
+    // earlier words intact
+    expect(out.slice(0, u.w0).map((w) => w.t)).toEqual(['a', 'b', 'c']);
+    // three new words inside the same window
+    expect(out.slice(u.w0, u.w0 + 3).map((w) => w.t)).toEqual(['x', 'y', 'z']);
+    expect(out[u.w0].s).toBeCloseTo(u.s);
+    expect(out[u.w0 + 2].e).toBeCloseTo(u.e);
+    // later words still there
+    expect(out.slice(u.w0 + 3)).toEqual(words.slice(u.w1 + 1));
+  });
+
+  it('handles fewer words and an empty replacement', () => {
+    const words = speech([['a', 'b'], ['c']]);
+    const units = buildUnits(words);
+    const out = replaceUnitText(words, units[0], 'only');
+    expect(out.map((w) => w.t)).toEqual(['only', 'c']);
+    expect(replaceUnitText(words, units[0], '   ')).toBe(words);
+  });
 });

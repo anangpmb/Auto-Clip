@@ -144,18 +144,22 @@ export function clipBounds(words: Word[], w0: number, w1: number, padStart: numb
 }
 
 /**
- * Cut points in seconds for a clip, whether it is anchored on words (via w0/w1) or on
- * absolute times (t0/t1, a manual clip made without a transcript). For time clips the
- * padding is applied as-is because there are no neighbouring words to constrain it.
+ * Cut points in seconds for a clip, whether it is anchored on words (via w0/w1, optionally
+ * overridden by the free tlo/thi), or on absolute times (t0/t1, a manual clip made without
+ * a transcript). For time clips the padding is applied as-is because there are no
+ * neighbouring words to constrain it.
  */
 export function clipBoundsOrTime(
   words: Word[],
-  clip: { w0: number; w1: number; t0?: number; t1?: number },
+  clip: { w0: number; w1: number; tlo?: number; thi?: number; t0?: number; t1?: number },
   padStart: number,
   padEnd: number,
 ) {
   if (clip.t0 !== undefined && clip.t1 !== undefined) {
     return { start: Math.max(0, clip.t0 - padStart), end: clip.t1 + padEnd };
+  }
+  if (clip.tlo !== undefined && clip.thi !== undefined) {
+    return { start: Math.max(0, clip.tlo), end: clip.thi };
   }
   return clipBounds(words, clip.w0, clip.w1, padStart, padEnd);
 }
@@ -182,6 +186,23 @@ export function unitsSpanFrom(units: Unit[], u: number, targetSec: number): numb
   let e = u;
   while (e + 1 < units.length && units[e].e - units[u].s < targetSec) e++;
   return e;
+}
+
+/**
+ * Replace a unit's text, re-timing the new words evenly across the same time window,
+ * and return the new word list. Words before/after the unit are untouched.
+ */
+export function replaceUnitText(words: Word[], unit: Unit, text: string): Word[] {
+  const tokens = text.split(/\s+/).filter(Boolean);
+  if (!tokens.length) return words;
+  const span = Math.max(unit.e - unit.s, 0.2 * tokens.length);
+  const n = tokens.length;
+  const made: Word[] = tokens.map((t, i) => ({
+    s: unit.s + (span * i) / n,
+    e: unit.s + (span * (i + 1)) / n,
+    t,
+  }));
+  return [...words.slice(0, unit.w0), ...made, ...words.slice(unit.w1 + 1)];
 }
 
 /** Re-anchor a clip on a different word list (e.g. after switching caption track). */

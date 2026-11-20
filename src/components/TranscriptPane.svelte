@@ -24,6 +24,8 @@
     onseek: (t: number) => void;
     onexpand: (dir: -1 | 1) => void;
     onwordedit: (wi: number, text: string) => void;
+    /** Replace a whole sentence/unit's text (may change the word count). */
+    onunitedit?: (ui: number, text: string) => void;
   }
   let {
     words,
@@ -43,6 +45,7 @@
     onseek,
     onexpand,
     onwordedit,
+    onunitedit,
   }: Props = $props();
 
   const MENU_W = 240;
@@ -57,6 +60,9 @@
   let editingWord = $state(false);
   let wordDraft = $state('');
   let editInput = $state<HTMLInputElement>();
+  let editingLine = $state(false);
+  let lineDraft = $state('');
+  let editLine = $state<HTMLTextAreaElement>();
   /** True while the user is reading elsewhere in the transcript during playback. */
   let followPaused = $state(false);
   let resumeTimer = 0;
@@ -108,6 +114,7 @@
       y: below + MENU_H > window.innerHeight - 8 ? Math.max(8, r.top - MENU_H - 4) : below,
     };
     editingWord = false;
+    editingLine = false;
   }
 
   function applyDrag(edge: Edge, wi: number) {
@@ -259,6 +266,29 @@
     menu = null;
     editingWord = false;
   }
+
+  async function beginLineEdit() {
+    if (!menu) return;
+    const u = units[unitIndexOfWord(units, menu.wi)];
+    lineDraft = words.slice(u.w0, u.w1 + 1).map((w) => w.t).join(' ');
+    editingLine = true;
+    await tick();
+    editLine?.focus();
+  }
+
+  function saveLineEdit() {
+    const text = lineDraft.trim();
+    if (!menu || !text) return;
+    const u = units[unitIndexOfWord(units, menu.wi)];
+    if (text === words.slice(u.w0, u.w1 + 1).map((w) => w.t).join(' ')) {
+      menu = null;
+      editingLine = false;
+      return;
+    }
+    onunitedit?.(u.id, text);
+    menu = null;
+    editingLine = false;
+  }
 </script>
 
 <div class="pane" class:dragging={drag} bind:this={box}>
@@ -291,7 +321,23 @@
     {@const wi = menu.wi}
     {@const u = units[unitIndexOfWord(units, wi)]}
     <div class="menu" style:left="{menu.x}px" style:top="{menu.y}px" style:width="{MENU_W}px">
-      {#if editingWord}
+      {#if editingLine}
+        <form class="word-edit" onsubmit={(e) => { e.preventDefault(); saveLineEdit(); }}>
+          <label for="transcript-line-edit">Koreksi baris · {fmtTime(words[u.w0].s, true)}–{fmtTime(words[u.w1].e)}</label>
+          <textarea
+            id="transcript-line-edit"
+            bind:this={editLine}
+            bind:value={lineDraft}
+            rows="3"
+            aria-label="Koreksi baris transkrip"
+            onkeydown={(e) => { if (e.key === 'Escape') { e.preventDefault(); editingLine = false; } }}
+          ></textarea>
+          <div class="word-edit-actions">
+            <button type="button" onclick={() => (editingLine = false)}>Batal</button>
+            <button type="submit" disabled={!lineDraft.trim()}>Simpan</button>
+          </div>
+        </form>
+      {:else if editingWord}
         <form class="word-edit" onsubmit={(e) => { e.preventDefault(); saveWordEdit(); }}>
           <label for="transcript-word-edit">Koreksi kata · {fmtTime(words[wi].s, true)}</label>
           <input
@@ -309,6 +355,7 @@
       {:else}
         <div class="menu-title">“{words[wi].t}” · {fmtTime(words[wi].s, true)}</div>
         <button onclick={beginWordEdit}><Icon name="edit" size={14} /> Koreksi kata</button>
+        {#if onunitedit}<button onclick={beginLineEdit}><Icon name="file" size={14} /> Koreksi baris ini</button>{/if}
         <button onclick={() => pick(() => onstart(Math.min(wi, w1), false))} disabled={wi > w1}>Mulai dari kata ini</button>
         <button onclick={() => pick(() => onend(Math.max(wi, w0), false))} disabled={wi < w0}>Akhiri di kata ini</button>
         <button onclick={() => pick(() => onstart(Math.min(u.w0, w1), false))} disabled={u.w0 > w1}>Mulai dari awal kalimat ini</button>
@@ -497,9 +544,15 @@
     font-size: 12px;
     color: var(--muted);
   }
-  .word-edit input {
+  .word-edit input,
+  .word-edit textarea {
     width: 100%;
     min-width: 0;
+  }
+  .word-edit textarea {
+    resize: vertical;
+    font: inherit;
+    line-height: 1.5;
   }
   .word-edit-actions {
     display: flex;

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { Unit, Word } from '../lib/types';
-  import { fmtDuration, fmtTime, nearestBoundary, unitIndexOfWord } from '../lib/transcript';
+  import { fmtDuration, fmtTime, unitIndexOfWord } from '../lib/transcript';
 
   type Edge = 'start' | 'end';
   interface Props {
@@ -10,31 +10,29 @@
     /** Visible word range. */
     lo: number;
     hi: number;
-    /** Clip word range. */
-    w0: number;
-    w1: number;
+    /** Free-form cut times of the clip, in seconds (dragged freely, not snapped to a word). */
+    startSec: number;
+    endSec: number;
     current: number;
     minSec: number;
     maxSec: number;
-    snap: boolean;
-    onstart: (wi: number) => void;
-    onend: (wi: number) => void;
+    onstart: (t: number) => void;
+    onend: (t: number) => void;
     ondragend: () => void;
     onseek: (t: number) => void;
     onexpand: (dir: -1 | 1) => void;
-    onnudge: (edge: Edge, dir: -1 | 1, bySentence: boolean) => void;
   }
-  let { words, units, lo, hi, w0, w1, current, minSec, maxSec, snap, onstart, onend, ondragend, onseek, onexpand, onnudge }: Props =
+  let { words, units, lo, hi, startSec, endSec, current, minSec, maxSec, onstart, onend, ondragend, onseek, onexpand }: Props =
     $props();
 
   let track: HTMLDivElement;
   let drag = $state<Edge | null>(null);
+  const cStart = $derived(startSec);
+  const cEnd = $derived(endSec);
 
   const vs = $derived(words[lo]?.s ?? 0);
   const ve = $derived(words[hi]?.e ?? vs + 1);
   const span = $derived(Math.max(1, ve - vs));
-  const cs = $derived(words[w0].s);
-  const ce = $derived(words[w1].e);
   const visUnits = $derived(units.slice(unitIndexOfWord(units, lo), unitIndexOfWord(units, hi) + 1));
   const ticks = $derived.by(() => {
     const step = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600].find((s) => span / s <= 8) ?? 600;
@@ -63,10 +61,9 @@
     };
     const move = (e: PointerEvent) => {
       if (!drag) return;
-      const wi = nearestBoundary(words, units, timeAt(e.clientX), lo, hi, drag, snap);
-      if (wi < 0) return;
-      if (drag === 'start') onstart(Math.min(wi, w1));
-      else onend(Math.max(wi, w0));
+      const t = timeAt(e.clientX);
+      if (drag === 'start') onstart(Math.min(t, cEnd));
+      else onend(Math.max(t, cStart));
     };
     const up = (e: PointerEvent) => {
       if (!drag) return;
@@ -89,14 +86,16 @@
   function key(e: KeyboardEvent, edge: Edge) {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     e.preventDefault();
-    onnudge(edge, e.key === 'ArrowLeft' ? -1 : 1, e.shiftKey);
+    const by = (e.shiftKey ? 5 : 1) * (e.key === 'ArrowLeft' ? -1 : 1);
+    if (edge === 'start') onstart(Math.min(cStart + by, cEnd));
+    else onend(Math.max(cEnd + by, cStart));
   }
 </script>
 
 <div class="timeline">
   <div class="head">
     <button class="ghost small" onclick={() => onexpand(-1)}>⟵ 30 dtk</button>
-    <span class="hint">Geser penanda <b>AWAL</b> / <b>AKHIR</b>. Klik di mana saja untuk memutar dari titik itu.</span>
+    <span class="hint">Geser penanda <b>AWAL</b> / <b>AKHIR</b> bebas (tidak menempel ke kata). Klik di mana saja untuk memutar dari titik itu.</span>
     <button class="ghost small" onclick={() => onexpand(1)}>30 dtk ⟶</button>
   </div>
 
@@ -112,12 +111,12 @@
       {/each}
       <div
         class="zone"
-        style:left="{pct(cs + minSec)}%"
-        style:width="{pct(cs + maxSec) - pct(cs + minSec)}%"
+        style:left="{pct(cStart + minSec)}%"
+        style:width="{pct(cStart + maxSec) - pct(cStart + minSec)}%"
         title="Area ideal untuk AKHIR ({minSec}–{maxSec} dtk)"
       ></div>
-      <div class="sel" style:left="{pct(cs)}%" style:width="{pct(ce) - pct(cs)}%">
-        <span>{fmtDuration(ce - cs)}</span>
+      <div class="sel" style:left="{pct(cStart)}%" style:width="{pct(cEnd) - pct(cStart)}%">
+        <span>{fmtDuration(cEnd - cStart)}</span>
       </div>
       {#if current >= vs && current <= ve}
         <div class="playhead" style:left="{pct(current)}%"></div>
@@ -125,32 +124,32 @@
       <div
         class="handle start"
         data-handle="start"
-        style:left="{pct(cs)}%"
+        style:left="{pct(cStart)}%"
         role="slider"
         tabindex="0"
-        aria-label="Awal klip (panah kiri/kanan per kata, Shift per kalimat)"
+        aria-label="Awal klip (panah kiri/kanan per detik, Shift per 5 detik)"
         aria-valuemin={Math.floor(vs)}
         aria-valuemax={Math.ceil(ve)}
-        aria-valuenow={Math.round(cs)}
-        aria-valuetext={fmtTime(cs, true)}
+        aria-valuenow={Math.round(cStart)}
+        aria-valuetext={fmtTime(cStart, true)}
         onkeydown={(e) => key(e, 'start')}
       >
-        <span class="tag">AWAL {fmtTime(cs, true)}</span>
+        <span class="tag">AWAL {fmtTime(cStart, true)}</span>
       </div>
       <div
         class="handle end"
         data-handle="end"
-        style:left="{pct(ce)}%"
+        style:left="{pct(cEnd)}%"
         role="slider"
         tabindex="0"
-        aria-label="Akhir klip (panah kiri/kanan per kata, Shift per kalimat)"
+        aria-label="Akhir klip (panah kiri/kanan per detik, Shift per 5 detik)"
         aria-valuemin={Math.floor(vs)}
         aria-valuemax={Math.ceil(ve)}
-        aria-valuenow={Math.round(ce)}
-        aria-valuetext={fmtTime(ce, true)}
+        aria-valuenow={Math.round(cEnd)}
+        aria-valuetext={fmtTime(cEnd, true)}
         onkeydown={(e) => key(e, 'end')}
       >
-        <span class="tag">AKHIR {fmtTime(ce, true)}</span>
+        <span class="tag">AKHIR {fmtTime(cEnd, true)}</span>
       </div>
     </div>
   </div>

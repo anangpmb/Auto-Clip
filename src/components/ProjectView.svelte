@@ -16,6 +16,7 @@
     joinWords,
     remapClip,
     unitIndexOfWord,
+    replaceUnitText,
     unitsSpanFrom,
     wordIndexAt,
   } from '../lib/transcript';
@@ -96,6 +97,25 @@
       saveWords(meta.id, words);
       saveProject(meta, clips, compilation);
       flash('Kata transkrip diperbarui');
+    } catch (e) {
+      flash((e as Error).message);
+    }
+  }
+
+  /** Replace a whole sentence, re-timing its words evenly and re-anchoring the clips. */
+  function updateUnit(ui: number, text: string) {
+    const u = buildUnits(words)[ui];
+    if (!u || !text.trim()) return;
+    const newWords = replaceUnitText(words, u, text);
+    // Re-anchor every clip onto the new word list so w0/w1 still point at the same speech.
+    const newUnits = buildUnits(newWords);
+    const remapped = clips.map((c) => remapClip(words, newWords, newUnits, c));
+    words = newWords;
+    clips = remapped;
+    try {
+      saveWords(meta.id, newWords);
+      saveProject(meta, remapped, compilation);
+      flash('Baris transkrip diperbarui');
     } catch (e) {
       flash((e as Error).message);
     }
@@ -480,6 +500,7 @@
             {helperHealth}
             onchange={updateClip}
             onwordedit={updateWord}
+            onunitedit={updateUnit}
             ontime={(t) => (playerTime = t)}
             onaddtimeless={addTimelessClip}
           />

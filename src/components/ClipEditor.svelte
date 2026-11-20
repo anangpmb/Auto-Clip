@@ -38,6 +38,8 @@
     helperHealth?: HelperHealth | null;
     onchange: (clip: Clip) => void;
     onwordedit: (wi: number, text: string) => void;
+    /** Edit a whole sentence/unit; may change the word count and re-anchor clips. */
+    onunitedit?: (ui: number, text: string) => void;
     ontime?: (t: number) => void;
     /** Add a new time-based (no-transcript) manual clip at the current playhead. */
     onaddtimeless?: () => void;
@@ -56,6 +58,7 @@
     helperHealth = null,
     onchange,
     onwordedit,
+    onunitedit,
     ontime,
     onaddtimeless,
   }: Props = $props();
@@ -135,11 +138,17 @@
     else hi = unitEndAt(words[hi].e + 30, Math.min(words.length - 1, hi + 1));
   }
 
+  // Where the timeline handles sit: the free cut times if the user dragged them, else the
+  // actual clip bounds (which include padding) so handles match what is played.
+  const freeStart = $derived(clip.tlo ?? bounds.start);
+  const freeEnd = $derived(clip.thi ?? bounds.end);
+
   function setRange(w0: number, w1: number, dragging = false) {
     w0 = Math.max(0, Math.min(w0, words.length - 1));
     w1 = Math.max(0, Math.min(w1, words.length - 1));
     if (w0 > w1 || (w0 === clip.w0 && w1 === clip.w1)) return;
-    onchange({ ...clip, w0, w1 });
+    // Word-based change clears any free cut times, back to word-derived bounds.
+    onchange({ ...clip, w0, w1, tlo: undefined, thi: undefined });
     if (!dragging) ensureContext(w0, w1);
   }
   const setStart = (wi: number, dragging = false) => setRange(Math.min(wi, clip.w1), clip.w1, dragging);
@@ -150,9 +159,23 @@
     else setEnd(bySentence ? sentenceStep(units, 'end', clip.w1, dir) : clip.w1 + dir);
   }
 
+  /** Free-form timeline drag: store tlo/thi and keep w0/w1 as the covered words. */
+  function dragStart(t: number) {
+    t = Math.min(t, freeEnd);
+    // The new start time usually lands inside a word; keep the clip's end word but extend
+    // the highlighted word range to the word containing t so captions cover the clip.
+    const w0 = Math.max(0, wordIndexAt(words, t));
+    onchange({ ...clip, w0, tlo: t, thi: freeEnd });
+  }
+  function dragEnd(t: number) {
+    t = Math.max(t, freeStart);
+    const w1 = Math.min(words.length - 1, wordIndexAt(words, t));
+    onchange({ ...clip, w1, thi: t, tlo: freeStart });
+  }
+
   function resetToAi() {
     if (clip.aiW0 === null || clip.aiW1 === null) return;
-    onchange({ ...clip, w0: clip.aiW0, w1: clip.aiW1 });
+    onchange({ ...clip, w0: clip.aiW0, w1: clip.aiW1, tlo: undefined, thi: undefined });
     ensureContext(clip.aiW0, clip.aiW1);
   }
 
@@ -345,18 +368,16 @@
     {units}
     {lo}
     {hi}
-    w0={clip.w0}
-    w1={clip.w1}
+    startSec={freeStart}
+    endSec={freeEnd}
     current={currentTime}
     minSec={settings.minSec}
     maxSec={settings.maxSec}
-    {snap}
-    onstart={(wi) => setStart(wi, true)}
-    onend={(wi) => setEnd(wi, true)}
+    onstart={dragStart}
+    onend={dragEnd}
     ondragend={() => ensureContext(clip.w0, clip.w1)}
     onseek={seek}
     onexpand={expand}
-    onnudge={nudge}
   />
 
   <TranscriptPane
@@ -377,6 +398,7 @@
     onseek={seek}
     onexpand={expand}
     {onwordedit}
+    {onunitedit}
   />
   {/if}
 

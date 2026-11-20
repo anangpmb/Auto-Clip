@@ -77,13 +77,13 @@ Opsi lain:
 2. Tempel link YouTube, klik **Ambil transkrip**.
 3. Klik **Cari klip dengan AI**.
 4. Pilih klip, lalu rapikan potongannya:
-   - **Timeline**: seret penanda AWAL (biru) dan AKHIR (biru muda). Garis hijau menunjukkan area
-     ideal untuk AKHIR sesuai durasi min/maks. Klik di mana saja untuk memutar dari titik itu.
+   - **Timeline**: seret penanda AWAL (biru) dan AKHIR (biru muda) secara bebas ke detik mana pun
+     (tidak menempel ke kata). Garis hijau menunjukkan area ideal untuk AKHIR sesuai durasi
+     min/maks. Klik di mana saja untuk memutar dari titik itu.
    - **Transkrip**: seret label AWAL/AKHIR ke kata lain, atau klik sebuah kata untuk memilih
      "Mulai dari kata ini", "Akhiri di kata ini", atau versi per kalimatnya.
    - **Tombol halus**: `« kalimat`, `‹ kata`, `kata ›`, `kalimat »` untuk awal dan akhir.
      Di timeline, tombol panah kiri/kanan menggeser per kata (Shift = per kalimat).
-   - **Seret menempel ke kalimat**: kalau aktif, seretan berhenti di batas kalimat.
    - **Putar klip / Cek awal / Cek akhir** untuk mendengar hasilnya.
    - **Kembalikan saran AI** untuk membatalkan perubahan.
 5. Ekspor: **Salin daftar**, **Salin perintah yt-dlp** (mengunduh potongan mentah), atau

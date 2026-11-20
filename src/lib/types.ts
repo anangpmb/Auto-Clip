@@ -33,8 +33,15 @@ export interface Clip {
   aiW0: number | null;
   aiW1: number | null;
   /**
-   * Absolute cut points in seconds. When present the clip is defined by time alone
-   * (no transcript required) and edited with a dual-range slider; w0/w1 are ignored.
+   * Free-form cut points in seconds for a *word-based* clip, overriding the word-derived
+   * bounds so a timeline handle can be dragged to any instant (not snapped to a word).
+   * When absent the bounds come from w0/w1. Captions still use w0/w1.
+   */
+  tlo?: number;
+  thi?: number;
+  /**
+   * Absolute cut points in seconds for a clip with *no transcript*. When present the clip
+   * is defined by time alone and edited with a dual-range slider; w0/w1 are ignored.
    * Captions are unavailable for such clips.
    */
   t0?: number;
