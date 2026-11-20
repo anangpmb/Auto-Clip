@@ -143,6 +143,23 @@ export function clipBounds(words: Word[], w0: number, w1: number, padStart: numb
   return { start: Math.max(0, start), end };
 }
 
+/**
+ * Cut points in seconds for a clip, whether it is anchored on words (via w0/w1) or on
+ * absolute times (t0/t1, a manual clip made without a transcript). For time clips the
+ * padding is applied as-is because there are no neighbouring words to constrain it.
+ */
+export function clipBoundsOrTime(
+  words: Word[],
+  clip: { w0: number; w1: number; t0?: number; t1?: number },
+  padStart: number,
+  padEnd: number,
+) {
+  if (clip.t0 !== undefined && clip.t1 !== undefined) {
+    return { start: Math.max(0, clip.t0 - padStart), end: clip.t1 + padEnd };
+  }
+  return clipBounds(words, clip.w0, clip.w1, padStart, padEnd);
+}
+
 export type DurationStatus = 'ok' | 'short' | 'long';
 
 export function durationStatus(d: number, minSec: number, maxSec: number): DurationStatus {
@@ -169,6 +186,8 @@ export function unitsSpanFrom(units: Unit[], u: number, targetSec: number): numb
 
 /** Re-anchor a clip on a different word list (e.g. after switching caption track). */
 export function remapClip(oldWords: Word[], newWords: Word[], newUnits: Unit[], clip: Clip): Clip {
+  // A timeless clip is defined by seconds alone, so it is untouched by a track switch.
+  if (clip.t0 !== undefined && clip.t1 !== undefined) return { ...clip };
   const last = newWords.length - 1;
   const map = (wi: number | null, which: 'start' | 'end') => {
     if (wi === null) return null;

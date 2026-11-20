@@ -93,6 +93,13 @@ Opsi lain:
 Tanpa API key pun bisa: **Impor klip** (lihat di bawah) memakai AI apa saja di luar app.
 7. Mau semua klip jadi MP4 sekaligus? Tekan **Ekspor massal** (lihat di bawah).
 
+### Klip manual tanpa transkrip
+Buka video lewat tombol **Tanpa transkrip (manual)** di halaman awal. Proyek dibuka tanpa
+mengambil transkrip, lalu kamu bisa **Tambah klip manual**: pilih potongan dengan menggeser
+penanda **AWAL**/**AKHIR** pada garis waktu berbasis waktu (panah kiri/kanan per detik,
+Shift = 5 detik) — tidak ada kata untuk diseret. Klip tanpa transkrip tidak punya caption.
+Video yang memang tidak menyediakan transkrip juga bisa dipakai cara ini.
+
 Proyek tersimpan otomatis di browser (localStorage).
 
 Transkrip "otomatis" dari YouTube punya waktu per kata yang asli, jadi potongannya paling

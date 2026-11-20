@@ -9,7 +9,7 @@
   import type { Clip, LoadedProject, Settings } from '../lib/types';
   import {
     buildUnits,
-    clipBounds,
+    clipBoundsOrTime,
     durationStatus,
     fmtDuration,
     fmtTime,
@@ -114,7 +114,7 @@
       clips = found;
       compilation = [];
     } else {
-      clips = [...clips, ...found].sort((a, b) => a.w0 - b.w0);
+      clips = [...clips, ...found].sort(bySourceTime);
     }
     selectedId = found[0]?.id ?? selectedId;
     showImport = false;
@@ -145,6 +145,10 @@
   }
 
   function addManualClip() {
+    if (!words.length) {
+      addTimelessClip();
+      return;
+    }
     const u = unitIndexOfWord(units, Math.max(0, wordIndexAt(words, playerTime)));
     const e = unitsSpanFrom(units, u, (settings.minSec + settings.maxSec) / 2);
     const clip: Clip = {
@@ -157,9 +161,37 @@
       aiW0: null,
       aiW1: null,
     };
-    clips = [...clips, clip].sort((a, b) => a.w0 - b.w0);
+    clips = [...clips, clip].sort(bySourceTime);
     selectedId = clip.id;
   }
+
+  /** A time-only manual clip (no transcript), anchored at the current playhead. */
+  function addTimelessClip() {
+    const total = Math.max(meta.video.duration || 0, 1);
+    const t0 = playerTime > 0 ? Math.min(playerTime, total - 1) : 0;
+    const t1 = Math.min(total, t0 + settings.maxSec);
+    const clip: Clip = {
+      id: newId(),
+      title: `Klip manual ${clips.length + 1}`,
+      reason: '',
+      score: 0,
+      w0: 0,
+      w1: 0,
+      aiW0: null,
+      aiW1: null,
+      t0,
+      t1,
+    };
+    clips = [...clips, clip].sort(bySourceTime);
+    selectedId = clip.id;
+  }
+
+  /** Order clips by where they sit in the source video; timeless clips use their start time. */
+  const bySourceTime = (a: Clip, b: Clip) => {
+    const at = a.t0 !== undefined && a.t1 !== undefined ? a.t0 : words[a.w0]?.s ?? a.w0;
+    const bt = b.t0 !== undefined && b.t1 !== undefined ? b.t0 : words[b.w0]?.s ?? b.w0;
+    return at - bt;
+  };
 
   async function runAI() {
     if (!(settings.apiKeys[settings.provider] ?? '').trim()) {
@@ -215,7 +247,7 @@
     }
   }
 
-  const boundsOf = (c: Clip) => clipBounds(words, c.w0, c.w1, settings.padStart, settings.padEnd);
+  const boundsOf = (c: Clip) => clipBoundsOrTime(words, c, settings.padStart, settings.padEnd);
   const safeName = (s: string) =>
     s
       .replace(/[\\/:*?"<>|%]+/g, '')
@@ -259,6 +291,7 @@
       track: meta.track,
       clips: clips.map((c, i) => {
         const b = boundsOf(c);
+        const timeless = c.t0 !== undefined && c.t1 !== undefined;
         return {
           n: i + 1,
           title: c.title,
@@ -267,7 +300,9 @@
           start: +b.start.toFixed(2),
           end: +b.end.toFixed(2),
           duration: +(b.end - b.start).toFixed(2),
-          text: joinWords(words, c.w0, c.w1),
+          ...(timeless
+            ? { manual_time: { start: c.t0, end: c.t1 } }
+            : { text: joinWords(words, c.w0, c.w1) }),
         };
       }),
     };
@@ -279,7 +314,7 @@
   }
 
   function downloadSelectedSrt() {
-    if (!selected) return;
+    if (!selected || (selected.t0 !== undefined && selected.t1 !== undefined)) return;
     const b = boundsOf(selected);
     const clipWords = words.slice(selected.w0, selected.w1 + 1);
     const srt = generateSrt(clipWords, b.start, b.end, { uppercase: settings.captionUppercase });
@@ -294,19 +329,21 @@
     {#if meta.video.thumbnail}<img class="thumb" src={meta.video.thumbnail} alt="" />{/if}
     <div class="info">
       <h1 title={meta.video.title}>{meta.video.title}</h1>
-      <p>{meta.video.channel} · {fmtTime(meta.video.duration)} · {words.length.toLocaleString('id-ID')} kata</p>
+      <p>{meta.video.channel} · {fmtTime(meta.video.duration)}{words.length ? ` · ${words.length.toLocaleString('id-ID')} kata` : ' · tanpa transkrip'}</p>
     </div>
-    <label class="track">
-      <span class="label">Transkrip</span>
-      <select value={meta.track} onchange={(e) => changeTrack(e.currentTarget)} disabled={trackBusy || !helperOk}>
-        {#each meta.tracks as t (t.key)}
-          <option value={t.key}>{t.name} · {t.kind === 'auto' ? 'otomatis' : 'manual'}</option>
-        {/each}
-      </select>
-    </label>
+    {#if words.length}
+      <label class="track">
+        <span class="label">Transkrip</span>
+        <select value={meta.track} onchange={(e) => changeTrack(e.currentTarget)} disabled={trackBusy || !helperOk}>
+          {#each meta.tracks as t (t.key)}
+            <option value={t.key}>{t.name} · {t.kind === 'auto' ? 'otomatis' : 'manual'}</option>
+          {/each}
+        </select>
+      </label>
+    {/if}
   </div>
 
-  {#if meta.wordTiming === 'estimated'}
+  {#if meta.wordTiming === 'estimated' && words.length}
     <div class="notice warn">
       <Icon name="warning" />
       <span>
@@ -321,14 +358,20 @@
       <span class="busy"><Icon name="loader" class="spin" /> {aiStatus}</span>
       <button onclick={() => controller?.abort()}>Batal</button>
     {:else}
-      <button class="primary" onclick={runAI}>
-        <Icon name="search" />
-        {clips.length ? 'Cari ulang dengan AI' : 'Cari klip dengan AI'}
-      </button>
-      <button onclick={() => (showImport = true)} title="Tempel klip yang dipilih AI lain (ChatGPT, Claude, Gemini) atau file JSON">
-        <Icon name="upload" /> Impor klip
-      </button>
-      <span class="muted">{PROVIDERS[settings.provider].label} · {settings.minSec}–{settings.maxSec} dtk · maks {settings.maxClips} klip</span>
+      {#if words.length}
+        <button class="primary" onclick={runAI}>
+          <Icon name="search" />
+          {clips.length ? 'Cari ulang dengan AI' : 'Cari klip dengan AI'}
+        </button>
+        <button onclick={() => (showImport = true)} title="Tempel klip yang dipilih AI lain (ChatGPT, Claude, Gemini) atau file JSON">
+          <Icon name="upload" /> Impor klip
+        </button>
+      {/if}
+      <span class="muted">
+        {words.length
+          ? `${PROVIDERS[settings.provider].label} · ${settings.minSec}–${settings.maxSec} dtk · maks ${settings.maxClips} klip`
+          : 'Mode manual — klip dibuat dan dirapikan berdasarkan waktu, tanpa transkrip.'}
+      </span>
     {/if}
     <span class="spacer"></span>
     {#if clips.length}
@@ -338,7 +381,7 @@
       <Menu
         label="Lainnya"
         items={[
-          { label: 'Unduh caption klip ini (.srt)', icon: 'file', onclick: downloadSelectedSrt, disabled: !selected },
+          { label: 'Unduh caption klip ini (.srt)', icon: 'file', onclick: downloadSelectedSrt, disabled: !selected || (selected.t0 !== undefined && selected.t1 !== undefined) },
           { label: 'Salin daftar klip', icon: 'copy', onclick: copyList },
           { label: 'Salin perintah yt-dlp', icon: 'terminal', onclick: copyYtDlp },
           { label: 'Unduh JSON', icon: 'download', onclick: downloadJson },
@@ -377,6 +420,7 @@
           {@const b = boundsOf(c)}
           {@const st = durationStatus(b.end - b.start, settings.minSec, settings.maxSec)}
           {@const edited = c.aiW0 !== null && (c.w0 !== c.aiW0 || c.w1 !== c.aiW1)}
+          {@const timeless = c.t0 !== undefined && c.t1 !== undefined}
           {@const scene = compilation.indexOf(c.id)}
           <div class="item" class:active={c.id === selectedId}>
             <button class="pick" onclick={() => (selectedId = c.id)} aria-current={c.id === selectedId ? 'true' : undefined}>
@@ -386,9 +430,14 @@
                 <span class="sub">
                   {fmtTime(b.start)}–{fmtTime(b.end)} · <span class="dur {st}">{fmtDuration(b.end - b.start)}</span>
                   {#if c.score}· skor {c.score}{/if}
+                  {#if timeless}<span class="badge accent">manual</span>{/if}
                   {#if edited}<span class="badge accent">diedit</span>{/if}
                 </span>
-                <span class="snip">“{joinWords(words, c.w0, Math.min(c.w1, c.w0 + 9))}…”</span>
+                {#if timeless}
+                  <span class="snip">Dipilih dari {fmtTime(c.t0!, true)}–{fmtTime(c.t1!, true)} tanpa transkrip.</span>
+                {:else}
+                  <span class="snip">“{joinWords(words, c.w0, Math.min(c.w1, c.w0 + 9))}…”</span>
+                {/if}
               </span>
             </button>
             <div class="tools">
@@ -425,12 +474,14 @@
             videoUrl={meta.video.url}
             videoTitle={meta.video.title}
             videoChannel={meta.video.channel}
+            videoDuration={meta.video.duration}
             bind:settings
             {helperOk}
             {helperHealth}
             onchange={updateClip}
             onwordedit={updateWord}
             ontime={(t) => (playerTime = t)}
+            onaddtimeless={addTimelessClip}
           />
         {:else}
           <p class="muted">Pilih klip di sebelah kiri.</p>
@@ -440,16 +491,26 @@
   {:else if !aiBusy}
     <div class="empty">
       <Icon name="scissors" size={20} />
-      <h2>Transkrip siap</h2>
-      <p>
-        Tekan <b>Cari klip dengan AI</b> untuk mendapatkan saran potongan, lalu rapikan awal dan akhirnya lewat timeline dan transkrip.
-        Tidak punya API key? Pakai <b>Impor klip</b>: salin prompt ke ChatGPT, Claude, atau Gemini, lalu tempel jawabannya. Kamu juga
-        bisa membuat klip sendiri.
-      </p>
-      <div class="empty-actions">
-        <button onclick={() => (showImport = true)}><Icon name="upload" /> Impor klip</button>
-        <button onclick={addManualClip}><Icon name="plus" /> Tambah klip manual</button>
-      </div>
+      <h2>{words.length ? 'Transkrip siap' : 'Mode manual'}</h2>
+      {#if words.length}
+        <p>
+          Tekan <b>Cari klip dengan AI</b> untuk mendapatkan saran potongan, lalu rapikan awal dan akhirnya lewat timeline dan transkrip.
+          Tidak punya API key? Pakai <b>Impor klip</b>: salin prompt ke ChatGPT, Claude, atau Gemini, lalu tempel jawabannya. Kamu juga
+          bisa membuat klip sendiri.
+        </p>
+        <div class="empty-actions">
+          <button onclick={() => (showImport = true)}><Icon name="upload" /> Impor klip</button>
+          <button onclick={addManualClip}><Icon name="plus" /> Tambah klip manual</button>
+        </div>
+      {:else}
+        <p>
+          Video ini dibuka tanpa transkrip, jadi klip dibuat secara manual berdasarkan waktu. Tekan <b>Tambah klip manual</b>, lalu
+          seret penanda <b>AWAL</b>/<b>AKHIR</b> pada garis waktu di editor untuk memilih potongan.
+        </p>
+        <div class="empty-actions">
+          <button onclick={addManualClip}><Icon name="plus" /> Tambah klip manual</button>
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -469,7 +530,7 @@
       onmove={moveScene}
       onremove={removeScene}
       onedit={editScene}
-      onsort={() => (compilation = inSourceOrder(compilation, clips))}
+      onsort={() => (compilation = inSourceOrder(compilation, clips, words))}
     />
   {/if}
 

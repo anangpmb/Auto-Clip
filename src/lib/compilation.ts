@@ -1,10 +1,11 @@
 import { groupWordsIntoCues, type CaptionCue, type CaptionOptions } from './captions';
-import { clipBounds } from './transcript';
+import { clipBoundsOrTime } from './transcript';
 import type { Clip, Word } from './types';
 
 /**
  * One scene of the final video: a clip's cut points in the source. A normal export has one
- * scene; a compilation plays several back to back.
+ * scene; a compilation plays several back to back. A time-anchored clip (no transcript)
+ * maps straight through; a word clip keeps its word range so captions can be derived.
  */
 export interface Scene {
   id: string;
@@ -13,6 +14,8 @@ export interface Scene {
   w1: number;
   start: number;
   end: number;
+  /** True when the clip has no transcript (t0/t1), so captions are unavailable. */
+  timeless?: boolean;
 }
 
 /** Same limit as the helper's: one clip or a whole compilation. */
@@ -22,8 +25,9 @@ export const SHORTS_SECONDS = 3 * 60;
 
 export function scenesOf(words: Word[], clips: Clip[], padStart: number, padEnd: number): Scene[] {
   return clips.map((c) => {
-    const b = clipBounds(words, c.w0, c.w1, padStart, padEnd);
-    return { id: c.id, title: c.title, w0: c.w0, w1: c.w1, start: b.start, end: b.end };
+    const timeless = c.t0 !== undefined && c.t1 !== undefined;
+    const b = clipBoundsOrTime(words, c, padStart, padEnd);
+    return { id: c.id, title: c.title, w0: c.w0, w1: c.w1, start: b.start, end: b.end, timeless };
   });
 }
 
@@ -43,12 +47,14 @@ export function sceneIndexAt(starts: number[], t: number): number {
 
 /**
  * Captions on the final video's timeline. Each scene is grouped on its own, so a caption
- * never runs across a cut, and is cut off where its scene ends.
+ * never runs across a cut, and is cut off where its scene ends. Timeless scenes (no words)
+ * contribute no captions.
  */
 export function timelineCues(words: Word[], scenes: Scene[], options: CaptionOptions = {}): CaptionCue[] {
   const starts = sceneStarts(scenes);
   const out: CaptionCue[] = [];
   scenes.forEach((s, i) => {
+    if (s.timeless || s.w0 > s.w1 || s.w1 >= words.length) return;
     const offset = starts[i];
     const length = s.end - s.start;
     const at = (t: number) => +(offset + Math.min(t, length)).toFixed(3);
@@ -66,8 +72,8 @@ export function timelineCues(words: Word[], scenes: Scene[], options: CaptionOpt
   return out;
 }
 
-/** Clip ids ordered as they appear in the source video. */
-export function inSourceOrder(ids: string[], clips: Clip[]): string[] {
-  const w0 = new Map(clips.map((c) => [c.id, c.w0]));
-  return [...ids].sort((a, b) => (w0.get(a) ?? 0) - (w0.get(b) ?? 0));
+/** Clip ids ordered as they appear in the source video. Time clips sort by their start time. */
+export function inSourceOrder(ids: string[], clips: Clip[], words: Word[] = []): string[] {
+  const sortKey = new Map(clips.map((c) => [c.id, c.t0 !== undefined && c.t1 !== undefined ? c.t0 : words[c.w0]?.s ?? c.w0]));
+  return [...ids].sort((a, b) => (sortKey.get(a) ?? 0) - (sortKey.get(b) ?? 0));
 }

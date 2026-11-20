@@ -49,6 +49,13 @@ export interface CaptionsResult {
   words: Word[];
 }
 
+/** Video info + caption tracks without transcript, for projects with no captions. */
+export interface VideoResult {
+  video: VideoInfo;
+  tracks: Track[];
+  track: string | null;
+}
+
 /** A stretch of the source video, in seconds. */
 export interface Span {
   start: number;
@@ -148,6 +155,32 @@ export async function fetchCaptions(helperUrl: string, url: string, track?: stri
     track: data.track,
     wordTiming: data.word_timing,
     words: (data.words as [number, number, string][]).map(([s, e, t]) => ({ s, e, t })),
+  };
+}
+
+/**
+ * Video info (title, duration, tracks) without needing a transcript, so a project can be
+ * opened and given time-based manual clips even when the video has no captions.
+ */
+export async function fetchVideo(helperUrl: string, url: string, signal?: AbortSignal): Promise<VideoResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${base(helperUrl)}/video`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+      signal,
+    });
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    throw new Error('Tidak bisa menghubungi helper. Pastikan helper sedang berjalan.');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Helper error (${res.status})`);
+  return {
+    video: data.video,
+    tracks: data.tracks ?? [],
+    track: data.track ?? null,
   };
 }
 

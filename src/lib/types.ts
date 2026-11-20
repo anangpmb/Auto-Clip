@@ -32,6 +32,13 @@ export interface Clip {
   /** Word range suggested by the AI (for "reset"); null for manual clips. */
   aiW0: number | null;
   aiW1: number | null;
+  /**
+   * Absolute cut points in seconds. When present the clip is defined by time alone
+   * (no transcript required) and edited with a dual-range slider; w0/w1 are ignored.
+   * Captions are unavailable for such clips.
+   */
+  t0?: number;
+  t1?: number;
 }
 
 export interface VideoInfo {

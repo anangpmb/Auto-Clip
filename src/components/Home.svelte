@@ -2,7 +2,7 @@
   import Icon from './ui/Icon.svelte';
   import { newId } from '../lib/ai';
   import { copyText } from '../lib/clipboard';
-  import { fetchCaptions, type HelperHealth } from '../lib/helper';
+  import { fetchCaptions, fetchVideo, type HelperHealth } from '../lib/helper';
   import { deleteProject, listProjects, loadProject, saveProject, saveWords } from '../lib/storage';
   import type { LoadedProject, ProjectMeta, Settings } from '../lib/types';
 
@@ -73,6 +73,32 @@
     }
   }
 
+  async function submitWithoutTranscript() {
+    if (!url.trim() || busy) return;
+    busy = true;
+    error = '';
+    try {
+      const res = await fetchVideo(settings.helperUrl, url.trim());
+      const now = new Date().toISOString();
+      const meta: ProjectMeta = {
+        id: newId(),
+        video: res.video,
+        tracks: res.tracks,
+        track: res.track ?? '',
+        wordTiming: 'estimated',
+        createdAt: now,
+        updatedAt: now,
+      };
+      saveWords(meta.id, []);
+      saveProject(meta, []);
+      onopen({ meta, words: [], clips: [] });
+    } catch (err) {
+      error = (err as Error).message;
+    } finally {
+      busy = false;
+    }
+  }
+
   function open(id: string) {
     const p = loadProject(id);
     if (p) onopen(p);
@@ -115,6 +141,9 @@
       <button class="primary" disabled={busy || !health?.ok}>
         <Icon name={busy ? 'loader' : 'captions'} class={busy ? 'spin' : ''} />
         {busy ? 'Mengambil transkrip…' : 'Ambil transkrip'}
+      </button>
+      <button class="secondary" type="button" disabled={busy || !health?.ok} onclick={submitWithoutTranscript} title="Buka video dan buat klip manual tanpa transkrip">
+        <Icon name="scissors" size={15} /> Tanpa transkrip (manual)
       </button>
     </form>
     {#if error}<div class="notice bad form-error"><Icon name="alert" /><span>{error}</span></div>{/if}
@@ -316,8 +345,9 @@
   form {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
-    max-width: 720px;
+    max-width: 820px;
     width: 100%;
     margin: 12px auto 0;
     padding: 6px 6px 6px 16px;

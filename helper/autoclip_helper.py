@@ -330,7 +330,6 @@ def get_captions(raw_url: str, track_key: str | None) -> dict:
 
 
 # ------------------------------------------------------------- web app ---
-
 APP_PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]*$")
 APP_FRESH_SECONDS = 60
 _app_cache: dict[str, tuple[float, int, str, bytes]] = {}
@@ -355,6 +354,21 @@ def _error_page(message: str) -> bytes:
         "<body style='font-family:system-ui;background:#0f1115;color:#e8eaf0;padding:40px'>"
         f"<h2>Web app tidak bisa dimuat</h2><p>{message}</p></body>"
     ).encode("utf-8")
+
+
+def get_video(raw_url: str) -> dict:
+    """Video info + caption tracks, without needing a transcript (for manual clips)."""
+    url = clean_url(raw_url)
+    if not url:
+        raise UserError("Link video kosong.")
+    if not is_youtube(url):
+        raise UserError("Saat ini hanya link YouTube yang didukung.")
+    entry = load_video(url)
+    return {
+        "video": entry["video"],
+        "tracks": [{k: v for k, v in t.items() if not k.startswith("_")} for t in entry["tracks"]],
+        "track": entry["tracks"][0]["key"] if entry["tracks"] else None,
+    }
 
 
 def fetch_app_file(path: str) -> tuple[int, str, bytes]:
@@ -2308,6 +2322,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(400, {"error": "JSON tidak valid."})
 
         path = urlparse(self.path).path
+        if path == "/video":
+            try:
+                self.send_json(200, get_video(str(body.get("url", ""))))
+            except UserError as e:
+                self.send_json(400, {"error": str(e)})
+            except Exception as e:
+                sys.stderr.write(f"[helper] error: {e!r}\n")
+                self.send_json(500, {"error": friendly_error(e)})
+            return
+
         if path == "/captions":
             try:
                 self.send_json(200, get_captions(str(body.get("url", "")), body.get("track")))

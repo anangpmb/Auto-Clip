@@ -3,6 +3,7 @@
   import Player from './Player.svelte';
   import Timeline from './Timeline.svelte';
   import TranscriptPane from './TranscriptPane.svelte';
+  import TimeRangeSlider from './TimeRangeSlider.svelte';
   import CaptionOverlay from './CaptionOverlay.svelte';
   import ExportModal from './ExportModal.svelte';
   import ThumbnailModal from './ThumbnailModal.svelte';
@@ -12,7 +13,7 @@
   import type { Clip, Settings, Unit, Word } from '../lib/types';
   import type { HelperHealth } from '../lib/helper';
   import {
-    clipBounds,
+    clipBoundsOrTime,
     durationStatus,
     fmtDuration,
     fmtTime,
@@ -30,12 +31,16 @@
     videoUrl?: string;
     videoTitle?: string;
     videoChannel?: string;
+    /** Source video length in seconds; used as the slider range for clips without a transcript. */
+    videoDuration?: number;
     settings: Settings;
     helperOk?: boolean;
     helperHealth?: HelperHealth | null;
     onchange: (clip: Clip) => void;
     onwordedit: (wi: number, text: string) => void;
     ontime?: (t: number) => void;
+    /** Add a new time-based (no-transcript) manual clip at the current playhead. */
+    onaddtimeless?: () => void;
   }
   let {
     words,
@@ -45,12 +50,14 @@
     videoUrl = '',
     videoTitle = '',
     videoChannel = '',
+    videoDuration = 0,
     settings = $bindable(),
     helperOk = false,
     helperHealth = null,
     onchange,
     onwordedit,
     ontime,
+    onaddtimeless,
   }: Props = $props();
 
   let player = $state<ReturnType<typeof Player>>();
@@ -86,7 +93,8 @@
     playerSlot.scrollIntoView({ block: 'start', behavior: smooth ? 'smooth' : 'auto' });
   }
 
-  const bounds = $derived(clipBounds(words, clip.w0, clip.w1, settings.padStart, settings.padEnd));
+  const timeless = $derived(clip.t0 !== undefined && clip.t1 !== undefined);
+  const bounds = $derived(clipBoundsOrTime(words, clip, settings.padStart, settings.padEnd));
   const duration = $derived(bounds.end - bounds.start);
   const status = $derived(durationStatus(duration, settings.minSec, settings.maxSec));
   const currentWord = $derived(currentTime > 0 ? wordIndexAt(words, currentTime) : -1);
@@ -103,6 +111,12 @@
   });
 
   function resetView() {
+    if (timeless) {
+      // Fit the whole (known) video into view; words may exist, but the clip ignores them.
+      lo = 0;
+      hi = Math.max(0, words.length - 1);
+      return;
+    }
     const s = words[clip.w0].s;
     const e = words[clip.w1].e;
     const ctx = Math.max(20, Math.min(60, (e - s) * 0.6));
@@ -140,6 +154,22 @@
     if (clip.aiW0 === null || clip.aiW1 === null) return;
     onchange({ ...clip, w0: clip.aiW0, w1: clip.aiW1 });
     ensureContext(clip.aiW0, clip.aiW1);
+  }
+
+  // --- Editing a clip defined by time alone (no transcript). ---
+  const sliderMax = $derived(videoDuration > 0 ? videoDuration : 3600);
+  const sliderMin = 0;
+  const timeStart = $derived(clip.t0 ?? sliderMin);
+  const timeEnd = $derived(clip.t1 ?? sliderMax);
+  function setTimeStart(t: number, dragging = false) {
+    t = Math.max(0, Math.min(t, timeEnd - 0.1));
+    if (t === timeStart) return;
+    onchange({ ...clip, t0: t, t1: timeEnd });
+  }
+  function setTimeEnd(t: number, dragging = false) {
+    t = Math.min(sliderMax, Math.max(t, timeStart + 0.1));
+    if (t === timeEnd) return;
+    onchange({ ...clip, t0: timeStart, t1: t });
   }
 
   const playClip = () => player?.playRange(bounds.start, bounds.end);
@@ -197,7 +227,7 @@
               clipStart={bounds.start}
               clipEnd={bounds.end}
               {currentTime}
-              enabled={settings.captionEnabled}
+              enabled={!timeless && settings.captionEnabled}
               style={settings.captionStyle}
               position={settings.captionPosition}
               uppercase={settings.captionUppercase}
@@ -235,48 +265,63 @@
       <button class="thumbnail-btn" onclick={() => (showThumbnailModal = true)}>
         <Icon name="film" /> Buat thumbnail
       </button>
+      {#if !timeless && onaddtimeless}
+        <button class="ghost timeline-btn" onclick={() => onaddtimeless?.()} title="Buat klip baru yang diedit berdasarkan waktu, tanpa transkrip">
+          <Icon name="clock" size={15} /> Klip manual tanpa transkrip
+        </button>
+      {/if}
 
       <div class="caption-bar">
-        <Switch bind:checked={settings.captionEnabled}><Icon name="captions" size={14} /> Caption</Switch>
-        {#if settings.captionEnabled}
-          <div class="cap-options">
-            <select bind:value={settings.captionStyle} aria-label="Gaya caption">
-              <option value="viral">Viral</option>
-              <option value="box">Kotak</option>
-              <option value="neon">Neon</option>
-              <option value="classic">Klasik</option>
-            </select>
-            <Segmented
-              label="Posisi caption"
-              bind:value={settings.captionPosition}
-              options={[
-                { value: 'bottom', label: 'Bawah' },
-                { value: 'center', label: 'Tengah' },
-                { value: 'top', label: 'Atas' },
-              ]}
-            />
-          </div>
+        {#if timeless}
+          <span class="caption-na"><Icon name="captions" size={14} /> Caption tidak tersedia — klip ini tidak punya transkrip.</span>
+        {:else}
+          <Switch bind:checked={settings.captionEnabled}><Icon name="captions" size={14} /> Caption</Switch>
+          {#if settings.captionEnabled}
+            <div class="cap-options">
+              <select bind:value={settings.captionStyle} aria-label="Gaya caption">
+                <option value="viral">Viral</option>
+                <option value="box">Kotak</option>
+                <option value="neon">Neon</option>
+                <option value="classic">Klasik</option>
+              </select>
+              <Segmented
+                label="Posisi caption"
+                bind:value={settings.captionPosition}
+                options={[
+                  { value: 'bottom', label: 'Bawah' },
+                  { value: 'center', label: 'Tengah' },
+                  { value: 'top', label: 'Atas' },
+                ]}
+              />
+            </div>
+          {/if}
         {/if}
       </div>
 
-      <div class="nudges">
-        {#each [{ edge: 'start' as Edge, name: 'Awal' }, { edge: 'end' as Edge, name: 'Akhir' }] as row (row.edge)}
-          <div class="nudge" role="group" aria-label="Geser {row.name.toLowerCase()} klip">
-            <span class="lbl">{row.name}</span>
-            <button onclick={() => nudge(row.edge, -1, true)} title={row.edge === 'start' ? 'Tambah 1 kalimat sebelumnya' : 'Buang kalimat terakhir'}>
-              <Icon name="chevrons-left" size={14} /> kalimat
-            </button>
-            <button onclick={() => nudge(row.edge, -1, false)} title="Mundur 1 kata"><Icon name="chevron-left" size={14} /> kata</button>
-            <button onclick={() => nudge(row.edge, 1, false)} title="Maju 1 kata">kata <Icon name="chevron-right" size={14} /></button>
-            <button onclick={() => nudge(row.edge, 1, true)} title={row.edge === 'start' ? 'Buang kalimat pertama' : 'Tambah 1 kalimat berikutnya'}>
-              kalimat <Icon name="chevrons-right" size={14} />
-            </button>
-          </div>
-        {/each}
-      </div>
+      {#if !timeless}
+        <div class="nudges">
+          {#each [{ edge: 'start' as Edge, name: 'Awal' }, { edge: 'end' as Edge, name: 'Akhir' }] as row (row.edge)}
+            <div class="nudge" role="group" aria-label="Geser {row.name.toLowerCase()} klip">
+              <span class="lbl">{row.name}</span>
+              <button onclick={() => nudge(row.edge, -1, true)} title={row.edge === 'start' ? 'Tambah 1 kalimat sebelumnya' : 'Buang kalimat terakhir'}>
+                <Icon name="chevrons-left" size={14} /> kalimat
+              </button>
+              <button onclick={() => nudge(row.edge, -1, false)} title="Mundur 1 kata"><Icon name="chevron-left" size={14} /> kata</button>
+              <button onclick={() => nudge(row.edge, 1, false)} title="Maju 1 kata">kata <Icon name="chevron-right" size={14} /></button>
+              <button onclick={() => nudge(row.edge, 1, true)} title={row.edge === 'start' ? 'Buang kalimat pertama' : 'Tambah 1 kalimat berikutnya'}>
+                kalimat <Icon name="chevrons-right" size={14} />
+              </button>
+            </div>
+          {/each}
+        </div>
+      {/if}
 
       <div class="opts">
-        <Switch bind:checked={snap}>Seret menempel ke kalimat</Switch>
+        {#if timeless}
+          <span class="opts-hint">Geser penanda <b>AWAL</b> / <b>AKHIR</b> pada garis waktu di bawah, atau gunakan panah pada penanda.</span>
+        {:else}
+          <Switch bind:checked={snap}>Seret menempel ke kalimat</Switch>
+        {/if}
         {#if edited}
           <button class="ghost small" onclick={resetToAi}><Icon name="reset" size={14} /> Kembalikan saran AI</button>
         {/if}
@@ -284,6 +329,17 @@
     </div>
   </div>
 
+  {#if timeless}
+    <TimeRangeSlider
+      start={timeStart}
+      end={timeEnd}
+      min={sliderMin}
+      max={sliderMax}
+      current={currentTime}
+      onstart={setTimeStart}
+      onend={setTimeEnd}
+    />
+  {:else}
   <Timeline
     {words}
     {units}
@@ -322,6 +378,7 @@
     onexpand={expand}
     {onwordedit}
   />
+  {/if}
 
   {#if floating}
     <!-- Extra room so the end of the transcript can be scrolled above the mini player. -->
@@ -506,6 +563,11 @@
     width: 100%;
     min-height: 36px;
   }
+  .timeline-btn {
+    justify-content: center;
+    width: 100%;
+    min-height: 34px;
+  }
   .caption-bar {
     display: grid;
     gap: 8px;
@@ -554,6 +616,17 @@
     gap: 8px;
     align-items: center;
     justify-content: space-between;
+  }
+  .opts-hint {
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .caption-na {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--muted);
   }
   @media (max-width: 900px) {
     .top {
