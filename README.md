@@ -149,6 +149,13 @@ Posisinya default kanan atas, teksnya bisa diedit, dan ukurannya, opasitasnya, s
 gayanya (teks saja atau latar gelap tipis) bisa diatur. Butuh helper 0.7.0 atau lebih baru;
 kalau helper lebih lama, panel ekspor akan memintamu memperbaruinya dulu.
 
+Di panel yang sama ada **Transisi penutup**: fade video menjadi gelap di akhir dengan efek
+pilihan (fade ke hitam, blur lalu gelap, atau geser ke atas) dan durasi yang bisa diatur.
+Opsional, unggah **SFX** (file audio dari perangkat, maks. 15 MB) yang dipadukan di atas audio
+klip pada ~0,6 detik terakhir — audio klipnya sendiri diturunkan selama transisi, jadi SFX
+menonjol sebagai penutup. SFX diunggah tiap render dan tidak disimpan lintas ekspor. Butuh
+helper 0.8.0 atau lebih baru.
+
 Saat **Mulai Render Video**, helper:
 
 1. Mengunduh hanya potongan klip itu, maksimal 1080p. Potongan diambil langsung per

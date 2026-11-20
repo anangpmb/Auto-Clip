@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import base64
 import copy
 import hashlib
 import importlib.util
@@ -40,7 +41,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlparse
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 DEFAULT_PORT = 8765
 DEV_ORIGINS = {
     "http://localhost:5173",
@@ -50,6 +51,7 @@ DEV_ORIGINS = {
 }
 CACHE_TTL = 20 * 60  # caption URLs from YouTube expire after a few hours
 MAX_BODY = 512 * 1024
+SFX_MAX_BYTES = 15 * 1024 * 1024  # an uploaded SFX clip, raw bytes
 
 try:
     import yt_dlp
@@ -417,6 +419,8 @@ WATERMARK_POSITIONS = ("top-left", "top-right", "bottom-left", "bottom-right")
 WATERMARK_SIZES = ("small", "medium")
 WATERMARK_STYLES = ("text", "shaded")
 POSITIONS = ("bottom", "center", "top")
+# Outro transition styles for the end of the video (helper 0.8.0+).
+OUTRO_TRANSITIONS = ("fade", "blur", "slide_up")
 MAX_CLIP_SECONDS = 10 * 60  # also the limit for a whole compilation
 MAX_SEGMENTS = 30  # scenes in one compilation
 JOB_TTL = 2 * 60 * 60  # finished exports stay downloadable this long
@@ -435,6 +439,11 @@ _jobs_lock = threading.Lock()
 _render_slot = threading.Semaphore(1)  # one export at a time keeps the computer usable
 _preview_slot = threading.Semaphore(1)  # preview downloads, one after another
 _face_slot = threading.Semaphore(1)  # face detection for previews runs beside the downloads
+
+# Uploaded SFX clips are kept briefly so an export can reference them by id.
+_sfx: dict[str, tuple[float, str]] = {}
+_sfx_lock = threading.Lock()
+SFX_TTL = 30 * 60  # a half hour is plenty: SFX is uploaded fresh for each export
 
 
 def get_ffmpeg_path() -> str | None:
@@ -468,6 +477,48 @@ def has_module(name: str) -> bool:
 def safe_filename(name: str) -> str:
     cleaned = re.sub(r'[\\/:*?"<>|]+', "", name).strip()
     return cleaned[:80] or "klip"
+
+
+def store_sfx(raw: bytes) -> str:
+    """Save an uploaded SFX clip, returning an id the export can reference."""
+    if not raw:
+        raise UserError("File SFX kosong.")
+    if len(raw) > SFX_MAX_BYTES:
+        raise UserError(f"File SFX terlalu besar (maks. {SFX_MAX_BYTES // (1024 * 1024)} MB).")
+    folder = os.path.join(DATA_DIR, "sfx")
+    os.makedirs(folder, exist_ok=True)
+    sfx_id = uuid.uuid4().hex
+    path = os.path.join(folder, f"{sfx_id}.bin")
+    with open(path, "wb") as f:
+        f.write(raw)
+    with _sfx_lock:
+        _purge_sfx_locked()
+        _sfx[sfx_id] = (time.time(), path)
+    return sfx_id
+
+
+def get_sfx(sfx_id: str | None) -> str | None:
+    """Resolve an SFX id to its path, dropping expired ones."""
+    if not sfx_id:
+        return None
+    with _sfx_lock:
+        hit = _sfx.get(sfx_id)
+    if not hit:
+        return None
+    path = hit[1]
+    return path if os.path.isfile(path) else None
+
+
+def _purge_sfx_locked():
+    now = time.time()
+    for sid, (t, path) in list(_sfx.items()):
+        if now - t > SFX_TTL:
+            _sfx.pop(sid, None)
+            if os.path.isfile(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
 
 def _update(job: dict, **fields):
@@ -1594,6 +1645,83 @@ def run_ffmpeg(cmd: list[str], duration: float, tmpdir: str, on_progress):
         raise UserError(f"FFmpeg gagal merender video: {reason[:300]}")
 
 
+def _clean_outro(raw) -> dict | None:
+    """The outro transition + SFX settings, or None if no outro is wanted."""
+    if not isinstance(raw, dict) or not raw:
+        return None
+    trans = raw.get("transition")
+    if trans not in OUTRO_TRANSITIONS:
+        return None
+    try:
+        dur = float(raw.get("duration", 1))
+    except (TypeError, ValueError):
+        dur = 1
+    dur = min(4.0, max(0.3, dur))
+    return {"transition": trans, "duration": dur}
+
+
+def apply_outro(ffmpeg_bin: str, src: str, outro: dict, sfx_path: str | None, has_audio: bool,
+                tmpdir: str, on_progress) -> str:
+    """A second ffmpeg pass that fades the end of the video out with a transition and,
+    when an SFX file is given, mixes it on top (the clip's own audio ducks out first)."""
+    td = outro["duration"]
+    trans = outro["transition"]
+    out = os.path.join(tmpdir, "final_outro.mp4")
+    cmd = [ffmpeg_bin, "-hide_banner", "-y", "-i", src]
+    if sfx_path:
+        cmd += ["-i", sfx_path]
+
+    meta = probe_media(ffmpeg_bin, src)
+    total = meta["duration"] or 0
+    start_d = max(0.0, total - td)
+
+    # Video: end on black with the chosen transition over the last td seconds. Every branch
+    # yields [0:v]... -> [vout] so the map below is consistent.
+    if trans == "fade":
+        vf = f"[0:v]fade=t=out:st={start_d:.3f}:d={td:.3f}:color=black[vout]"
+    elif trans == "blur":
+        w, h = meta["width"], meta["height"]
+        ramp = f"min(1,(T-{start_d:.3f})/{td:.3f})"
+        vf = (
+            f"[0:v]split=2[vo][vb];[vb]boxblur=18:2[vbb];"
+            f"[vo][vbb]blend=all_expr='A*(1-{ramp})+B*{ramp}',"
+            f"scale={w}:{h},fade=t=out:st={start_d:.3f}:d={td:.3f}:color=black[vout]"
+        )
+    else:  # slide_up: the frame lifts a touch (constant 8% up-shift) and fades away.
+        vf = (
+            f"[0:v]crop=iw:ih*0.92:0:ih*0.08,pad=iw:ih:0:0,"
+            f"fade=t=out:st={start_d:.3f}:d={td:.3f}:color=black[vout]"
+        )
+    graph = vf
+
+    # Audio: duck the tail of the clip; an SFX plays over the closing stretch on top.
+    if sfx_path and has_audio:
+        sfx_at = max(0.0, total - 0.6)
+        af = (
+            f"[0:a]afade=t=out:st={start_d:.3f}:d={td:.3f},"
+            f"volume=enable='gte(t,{start_d:.3f})':volume=0.25[a0];"
+            f"[1:a]adelay={round(sfx_at * 1000)}|{round(sfx_at * 1000)},aformat=sample_rates=48000:"
+            f"channel_layouts=stereo,volume=1.0[as];"
+            f"[a0][as]amix=inputs=2:duration=first:normalize=0[aout]"
+        )
+        graph += ";" + af
+        amap = ["-map", "[aout]"]
+    elif has_audio:
+        af = f"[0:a]afade=t=out:st={start_d:.3f}:d={td:.3f}[aout]"
+        graph += ";" + af
+        amap = ["-map", "[aout]"]
+    else:
+        amap = ["-map", "0:a?"]
+
+    cmd += ["-filter_complex", graph, "-map", "[vout]", *amap,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
+            "-progress", "pipe:1", "-nostats", out]
+    run_ffmpeg(cmd, total, tmpdir, on_progress)
+    os.replace(out, src)  # final_outro.mp4 replaces final.mp4
+    return src
+
+
 def _run_export_job(job: dict, params: dict):
     notes: list[str] = []
     try:
@@ -1604,6 +1732,8 @@ def _run_export_job(job: dict, params: dict):
         style = params.get("captionStyle") if params.get("captionStyle") in CAPTION_STYLES else "viral"
         position = params.get("captionPosition") if params.get("captionPosition") in POSITIONS else "bottom"
         cues = _clean_cues(params.get("cues")) if style != "none" else []
+        outro = _clean_outro(params.get("outro"))
+        sfx_path = get_sfx(params.get("sfxId")) if outro else None
 
         ffmpeg_bin = get_ffmpeg_path()
         if not ffmpeg_bin:
@@ -1743,7 +1873,19 @@ def _run_export_job(job: dict, params: dict):
                 "-progress", "pipe:1", "-nostats", final,
             ]
             _update(job, status="rendering", progress=60, message="Merender video...")
-            run_ffmpeg(cmd, duration, tmpdir, lambda f: _update(job, progress=60 + round(39 * f)))
+            run_ffmpeg(cmd, duration, tmpdir, lambda f: _update(job, progress=60 + round(30 * f)))
+
+            if outro:
+                has_audio = any(m.get("audio") for m in metas) if many else bool(metas[0].get("audio"))
+                _update(job, status="rendering", progress=93, message="Menerapkan transisi penutup...")
+                try:
+                    final = apply_outro(ffmpeg_bin, final, outro, sfx_path, has_audio, tmpdir,
+                                        lambda f: _update(job, progress=93 + round(7 * f)))
+                    if sfx_path:
+                        notes.append("SFX dipadu di akhir video.")
+                except UserError as e:
+                    notes.append(f"Transisi penutup dilewati: {e}")
+                    final = final  # keep the plain render if the extra pass fails
         finally:
             _render_slot.release()
 
@@ -2313,6 +2455,24 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(403, {"error": "bad_host"})
         if not self.origin_allowed():
             return self.reject_origin()
+        path = urlparse(self.path).path
+        # A raw audio upload (the SFX): the body is bytes, not JSON.
+        if path == "/sfx":
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > SFX_MAX_BYTES:
+                return self.send_json(413, {"error": "File SFX terlalu besar."})
+            try:
+                raw = self.rfile.read(length)
+            except (BrokenPipeError, ConnectionResetError):
+                return self.send_json(400, {"error": "Gagal membaca file."})
+            try:
+                return self.send_json(200, {"ok": True, "id": store_sfx(raw)})
+            except UserError as e:
+                return self.send_json(400, {"error": str(e)})
+            except Exception as e:
+                sys.stderr.write(f"[helper] sfx error: {e!r}\n")
+                return self.send_json(500, {"error": "Gagal menyimpan SFX."})
+
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_BODY:
             return self.send_json(413, {"error": "Permintaan terlalu besar."})
@@ -2320,8 +2480,6 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
             return self.send_json(400, {"error": "JSON tidak valid."})
-
-        path = urlparse(self.path).path
         if path == "/video":
             try:
                 self.send_json(200, get_video(str(body.get("url", ""))))

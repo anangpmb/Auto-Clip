@@ -6,6 +6,7 @@
   import FormatPicker from './FormatPicker.svelte';
   import Icon from './ui/Icon.svelte';
   import Modal from './ui/Modal.svelte';
+  import Switch from './ui/Switch.svelte';
   import type { Clip, Settings, Word } from '../lib/types';
   import { assWordsPerCue, buildExportCommand, cuesToAss, cuesToSrt, cuesToVtt, downloadFile } from '../lib/captions';
   import { MAX_FINAL_SECONDS, scenesOf, sceneStarts, SHORTS_SECONDS, timelineCues } from '../lib/compilation';
@@ -17,11 +18,14 @@
     EXPORT_HELPER_VERSION,
     GAMING_HELPER_VERSION,
     getExportDownloadUrl,
+    OUTRO_HELPER_VERSION,
     PREVIEW_HELPER_VERSION,
     startExport,
+    uploadSfx,
     versionBefore,
     WATERMARK_HELPER_VERSION,
     type HelperHealth,
+    type OutroTransition,
   } from '../lib/helper';
   import { resolveWatermark } from '../lib/watermark';
   import type { Box } from '../lib/preview';
@@ -143,6 +147,14 @@
   let pollTimer: number | null = null;
   let copiedCmd = $state(false);
 
+  // Outro transition + SFX, decided here per export.
+  let outroEnabled = $state(false);
+  let outroTransition = $state<OutroTransition>('fade');
+  let outroDuration = $state(1.5);
+  let sfxFile = $state<{ file: File; name: string } | null>(null);
+  let sfxUploading = $state(false);
+  const sfxSupported = $derived(helperHealth?.ok && !versionBefore(helperHealth.version, OUTRO_HELPER_VERSION));
+
   // Older helpers ignore `cues` (no captions), cannot follow faces, join scenes or split for games.
   const helperOutdated = $derived(!!helperHealth?.ok && versionBefore(helperHealth.version, exportVersion));
   const warnings = $derived.by(() => {
@@ -194,6 +206,17 @@
 
     try {
       const spans = scenes.map(({ start, end }) => ({ start, end }));
+      // The SFX upload must finish before the job starts, so the helper can mix it in.
+      let sfxId: string | undefined;
+      if (outroEnabled && sfxFile) {
+        sfxUploading = true;
+        exportMessage = 'Mengunggah SFX...';
+        try {
+          sfxId = await uploadSfx(settings.helperUrl, sfxFile.file);
+        } finally {
+          sfxUploading = false;
+        }
+      }
       const { jobId } = await startExport(settings.helperUrl, {
         url: sourceUrl,
         videoId,
@@ -208,6 +231,8 @@
         gaming: gamingMode
           ? { face: $state.snapshot(faceBox) ?? detectedFace, game: $state.snapshot(gameBox), faceTop: settings.gamingFaceTop }
           : undefined,
+        sfxId,
+        outro: outroEnabled ? { transition: outroTransition, duration: outroDuration } : undefined,
       });
 
       pollTimer = window.setInterval(async () => {
@@ -382,6 +407,67 @@
       <section class="group">
         <h3 class="group-title">Watermark sumber</h3>
         <WatermarkSettings bind:settings channel={videoChannel} bind:text={watermarkText} />
+      </section>
+
+      <section class="group">
+        <h3 class="group-title">Transisi penutup</h3>
+        <p class="hint">Fade video menjadi gelap di akhir dengan efek, lalu (opsional) padukan SFX di atasnya.</p>
+        {#if !helperHealth?.ok}
+          <div class="notice"><Icon name="info" /><span>Transisi penutup dipakai saat render; helper perlu menyala dulu.</span></div>
+        {:else if !sfxSupported}
+          <div class="notice warn">
+            <Icon name="warning" />
+            <span>
+              Transisi penutup butuh helper versi {OUTRO_HELPER_VERSION} atau lebih baru (sekarang {helperHealth.version ?? 'lama'}).
+              Buka ulang helper lewat launcher AutoClip untuk memperbaruinya.
+            </span>
+          </div>
+        {:else}
+          <label class="check-row">
+            <Switch bind:checked={outroEnabled} /> Pakai transisi penutup
+          </label>
+          {#if outroEnabled}
+            <div class="outro-fields">
+              <label class="field">
+                <span>Efek</span>
+                <select bind:value={outroTransition} aria-label="Efek transisi penutup">
+                  <option value="fade">Fade ke hitam</option>
+                  <option value="blur">Blur lalu gelap</option>
+                  <option value="slide_up">Geser ke atas</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Durasi · {outroDuration.toFixed(1)} dtk</span>
+                <input type="range" min="0.5" max="4" step="0.5" bind:value={outroDuration} aria-label="Durasi transisi penutup" />
+              </label>
+              <div class="field">
+                <span>SFX (opsional)</span>
+                {#if sfxFile}
+                  <div class="sfx-chip">
+                    <Icon name="file" size={14} />
+                    <span class="grow ellipsis">{sfxFile.name}</span>
+                    <button type="button" class="icon-btn small ghost" onclick={() => (sfxFile = null)} aria-label="Hapus SFX" title="Hapus SFX">
+                      <Icon name="close" size={14} />
+                    </button>
+                  </div>
+                {:else}
+                  <label class="sfx-pick">
+                    <span>Pilih file audio</span>
+                    <input
+                      type="file"
+                      accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac"
+                      onchange={(e) => {
+                        const f = e.currentTarget.files?.[0];
+                        if (f) sfxFile = { file: f, name: f.name };
+                      }}
+                    />
+                  </label>
+                {/if}
+                <span class="hint">SFX diputar di ~0,6 dtk terakhir. Audio klip diturunkan saat transisi.</span>
+              </div>
+            </div>
+          {/if}
+        {/if}
       </section>
 
       <!-- Render with the helper -->
@@ -653,6 +739,64 @@
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
+  }
+
+  .check-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .outro-fields {
+    display: grid;
+    gap: 10px;
+  }
+  .field {
+    display: grid;
+    gap: 4px;
+  }
+  .field > span:first-child {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .field select {
+    padding: 4px 8px;
+  }
+  .field input[type='range'] {
+    width: 100%;
+  }
+  .sfx-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: var(--radius-md);
+    background: var(--panel-2);
+    font-size: 13px;
+  }
+  .grow {
+    flex: 1;
+  }
+  .ellipsis {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sfx-pick {
+    display: block;
+    padding: 8px 12px;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-md);
+    color: var(--accent-text);
+    font-size: 13px;
+    cursor: pointer;
+    text-align: center;
+  }
+  .sfx-pick:hover:not(:disabled) {
+    background: var(--accent-wash);
+  }
+  .sfx-pick input {
+    display: none;
   }
 
   .manual summary {

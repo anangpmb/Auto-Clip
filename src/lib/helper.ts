@@ -29,6 +29,11 @@ export const GAMING_HELPER_VERSION = '0.6.0';
 export const BLUR_LAYOUT_HELPER_VERSION = '0.6.1';
 /** Oldest helper that burns a source-channel watermark into the export. */
 export const WATERMARK_HELPER_VERSION = '0.7.0';
+/** Oldest helper with SFX upload and the outro transition at the end of the video. */
+export const OUTRO_HELPER_VERSION = '0.8.0';
+
+/** Outro transition styles for the end of the video. */
+export type OutroTransition = 'fade' | 'blur' | 'slide_up';
 
 /** True when version a is older than b (dotted numbers). */
 export function versionBefore(a: string | undefined, b: string): boolean {
@@ -82,6 +87,10 @@ export interface ExportParams {
   previewId?: string;
   /** Gamer mode: the gameplay and webcam areas; a null area is found automatically / centred. */
   gaming?: { face: Box | null; game: Box | null; faceTop: boolean };
+  /** Rendered via `/sfx` upload; referenced by id here. */
+  sfxId?: string;
+  /** The outro transition: fade the end of the video out over this many seconds. */
+  outro?: { transition: OutroTransition; duration: number };
 }
 
 /** Face-following path for the 9:16 crop: [seconds from clip start, left edge as a share of the width]. */
@@ -182,6 +191,25 @@ export async function fetchVideo(helperUrl: string, url: string, signal?: AbortS
     tracks: data.tracks ?? [],
     track: data.track ?? null,
   };
+}
+
+/**
+ * Uploads an SFX audio file to the helper, returning its id to pass to startExport.
+ */
+export async function uploadSfx(helperUrl: string, file: Blob | File): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetch(`${base(helperUrl)}/sfx`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: file,
+    });
+  } catch {
+    throw new Error('Tidak bisa menghubungi helper untuk mengunggah SFX.');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Helper error (${res.status})`);
+  return data.id as string;
 }
 
 /**
